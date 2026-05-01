@@ -36,10 +36,13 @@ jobs:
       - name: Lua syntax check (all sources)
         run: |
           set -e
-          for f in asobi/*.lua smoke_tests/*.lua; do
+          for f in asobi/*.lua smoke_tests/*.lua test/*.lua; do
             echo "  syntax: $f"
             luac5.4 -p "$f"
           done
+
+      - name: Dispatch test (canonical fixtures -> SDK callbacks)
+        run: lua5.4 test/dispatch.lua
 
       - name: Clone sdk_demo_backend
         run: git clone --depth 1 https://github.com/widgrensit/sdk_demo_backend
