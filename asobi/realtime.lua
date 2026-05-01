@@ -8,28 +8,43 @@ local json = require("asobi.json")
 local M = {}
 M.__index = M
 
+-- Maps server wire `type` -> SDK callback name. Must stay in sync with
+-- the asobi protocol fixture corpus (see test/fixtures/) — the dispatch
+-- test in test/dispatch.lua loads every fixture and asserts the
+-- callback fires.
 local SERVER_EVENTS = {
+	["error"] = "error",
 	["session.connected"] = "connected",
+	["session.heartbeat"] = "heartbeat",
 	["match.state"] = "match_state",
-	["match.started"] = "match_started",
-	["match.finished"] = "match_finished",
+	["match.matched"] = "match_matched",
 	["match.joined"] = "match_joined",
 	["match.left"] = "match_left",
-	["match.matched"] = "match_matched",
+	["match.finished"] = "match_finished",
+	["match.matchmaker_expired"] = "matchmaker_expired",
+	["match.matchmaker_failed"] = "matchmaker_failed",
+	["match.vote_start"] = "vote_start",
+	["match.vote_tally"] = "vote_tally",
+	["match.vote_result"] = "vote_result",
+	["match.vote_vetoed"] = "vote_vetoed",
 	["matchmaker.queued"] = "matchmaker_queued",
-	["matchmaker.matched"] = "matchmaker_matched",
+	["matchmaker.removed"] = "matchmaker_removed",
+	["chat.joined"] = "chat_joined",
+	["chat.left"] = "chat_left",
 	["chat.message"] = "chat_message",
-	["notification.new"] = "notification",
-	["presence.updated"] = "presence_changed",
+	["dm.sent"] = "dm_sent",
 	["dm.message"] = "dm_message",
+	["presence.updated"] = "presence_changed",
+	["notification.new"] = "notification",
+	["vote.cast_ok"] = "vote_cast_ok",
+	["vote.veto_ok"] = "vote_veto_ok",
+	["world.tick"] = "world_tick",
+	["world.terrain"] = "world_terrain",
 	["world.list"] = "world_list",
 	["world.joined"] = "world_joined",
 	["world.left"] = "world_left",
-	["world.tick"] = "world_tick",
-	["world.terrain"] = "world_terrain",
 	["world.phase_changed"] = "phase_changed",
 	["world.finished"] = "world_finished",
-	["error"] = "error",
 }
 
 function M.new(client)
