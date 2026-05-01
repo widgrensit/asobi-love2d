@@ -1,0 +1,6 @@
+*.love
+*.luac
+.luarocks/
+.lua_modules/
+.DS_Store
+*.swp

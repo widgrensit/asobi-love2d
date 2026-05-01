@@ -1,0 +1,82 @@
+# asobi-love2d smoke test workflow.
+#
+# What this verifies:
+#   1. All Lua source files parse cleanly (`luac -p`).
+#   2. The SDK's network layer (HTTP + WebSocket) drives the canonical
+#      sdk_demo_backend SMOKE.md flow end-to-end with two clients,
+#      including the x-displacement assertion.
+#
+# This is a true end-to-end smoke — it does NOT require LÖVE itself, since
+# the asobi network layer uses luasocket directly. Standalone Lua + luasocket
+# is sufficient. CI can therefore validate the SDK without a LÖVE install.
+
+name: Smoke
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  smoke:
+    name: Lua syntax + sdk_demo_backend end-to-end
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Lua 5.4 + luarocks
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y lua5.4 liblua5.4-dev luarocks
+
+      - name: Install luasocket
+        run: sudo luarocks --lua-version=5.4 install luasocket
+
+      - name: Lua syntax check (all sources)
+        run: |
+          set -e
+          for f in asobi/*.lua smoke_tests/*.lua; do
+            echo "  syntax: $f"
+            luac5.4 -p "$f"
+          done
+
+      - name: Clone sdk_demo_backend
+        run: git clone --depth 1 https://github.com/widgrensit/sdk_demo_backend
+
+      - name: docker compose up
+        working-directory: sdk_demo_backend
+        run: docker compose up -d
+
+      - name: Wait for backend
+        run: |
+          for i in $(seq 1 60); do
+            code=$(curl -sS -o /dev/null -w "%{http_code}" \
+              -X POST http://localhost:8084/api/v1/auth/register \
+              -H "Content-Type: application/json" \
+              -d '{}' 2>/dev/null) || code="000"
+            case "$code" in
+              [1-4][0-9][0-9])
+                echo "backend up after ${i}s (probe: $code)"
+                exit 0
+                ;;
+            esac
+            sleep 1
+          done
+          echo "backend never came up"
+          exit 1
+
+      - name: Run smoke
+        env:
+          ASOBI_URL: http://localhost:8084
+        run: lua5.4 smoke_tests/smoke.lua
+
+      - name: Backend logs on failure
+        if: failure()
+        working-directory: sdk_demo_backend
+        run: docker compose logs --no-color || true
+
+      - name: Tear down
+        if: always()
+        working-directory: sdk_demo_backend
+        run: docker compose down -v || true
