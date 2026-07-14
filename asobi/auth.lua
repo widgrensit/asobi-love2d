@@ -42,6 +42,7 @@ function M.guest(client, device_id, device_secret)
 	})
 	if not err and data then
 		client.session_token = data.access_token
+		client.refresh_token = data.refresh_token
 		client.player_id = data.player_id
 	end
 	return data, err
@@ -57,6 +58,7 @@ function M.upgrade_guest(client, username, password)
 	})
 	if not err and data then
 		client.session_token = data.access_token
+		client.refresh_token = data.refresh_token
 		client.player_id = data.player_id
 	end
 	return data, err
