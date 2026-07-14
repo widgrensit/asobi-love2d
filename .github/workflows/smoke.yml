@@ -44,6 +44,9 @@ jobs:
       - name: Dispatch test (canonical fixtures -> SDK callbacks)
         run: lua5.4 test/dispatch.lua
 
+      - name: Auth test (mocked HTTP -> request shape + token storage)
+        run: lua5.4 test/auth.lua
+
       - name: Clone sdk_demo_backend
         run: git clone --depth 1 https://github.com/widgrensit/sdk_demo_backend
 

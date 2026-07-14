@@ -110,9 +110,37 @@ Synchronous. Returns `(data, err)` — `err` is `nil` on success or `{status_cod
 ```lua
 asobi.auth.register(client, username, password, display_name)
 asobi.auth.login(client, username, password)
+asobi.auth.guest(client, device_id, device_secret)
+asobi.auth.upgrade_guest(client, username, password)
 asobi.auth.refresh(client)
 asobi.auth.logout(client)
 ```
+
+#### Guest / anonymous auth
+
+Let a player start immediately with no sign-up. `guest` creates a new guest
+identity, or resumes an existing one, keyed by a stable `device_id` plus a
+`device_secret` you generate and store on the device. The secret is the base64
+encoding of at least 32 CSPRNG bytes — you own generating and persisting it; the
+SDK just passes it through.
+
+```lua
+-- device_id: any stable per-install id you keep (e.g. a saved UUID).
+-- device_secret: base64 of >=32 random bytes, generated once and stored.
+local data, err = asobi.auth.guest(client, device_id, device_secret)
+if err then error("guest auth failed: " .. err.error) end
+-- data.created == true on first call, absent on resume. data.guest == true.
+-- The access token is now stored on the client, so realtime/HTTP calls work.
+
+-- Later, convert the guest into a full account (keeps the same player_id):
+local up, up_err = asobi.auth.upgrade_guest(client, "chosen_name", "pass1234")
+if up_err then error("upgrade failed: " .. up_err.error) end
+```
+
+Both are synchronous and return `(data, err)` like the other auth calls. Common
+error codes: `weak_device_secret`, `invalid_device_secret`, `guest_upgraded`,
+`guest_auth_disabled` (guest); `not_an_unclaimed_guest`, `username_taken`
+(upgrade).
 
 ### `asobi.matchmaker`
 
