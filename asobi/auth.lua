@@ -11,7 +11,8 @@ function M.register(client, username, password, display_name)
 		display_name = display_name or username,
 	})
 	if not err and data then
-		client.session_token = data.session_token
+		client.session_token = data.access_token
+		client.refresh_token = data.refresh_token
 		client.player_id = data.player_id
 	end
 	return data, err
@@ -23,7 +24,8 @@ function M.login(client, username, password)
 		password = password,
 	})
 	if not err and data then
-		client.session_token = data.session_token
+		client.session_token = data.access_token
+		client.refresh_token = data.refresh_token
 		client.player_id = data.player_id
 	end
 	return data, err
@@ -31,14 +33,18 @@ end
 
 function M.refresh(client)
 	local data, err = http.post(client, "/api/v1/auth/refresh", {
-		session_token = client.session_token,
+		refresh_token = client.refresh_token,
 	})
-	if not err and data then client.session_token = data.session_token end
+	if not err and data then
+		client.session_token = data.access_token
+		client.refresh_token = data.refresh_token
+	end
 	return data, err
 end
 
 function M.logout(client)
 	client.session_token = nil
+	client.refresh_token = nil
 	client.player_id = nil
 end
 
