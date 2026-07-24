@@ -48,6 +48,17 @@ function M.guest(client, device_id, device_secret)
 	return data, err
 end
 
+-- Opt-in convenience: load (or generate + persist) a device credential pair
+-- and sign in as a guest in one call. Equivalent to calling M.guest with a
+-- {device_id, device_secret} you manage yourself. opts is forwarded to
+-- asobi.device.load_or_create (file/store/random_bytes overrides) and may be
+-- omitted. Synchronous; returns (data, err) like M.guest.
+function M.guest_device(client, opts)
+	local device = require("asobi.device")
+	local device_id, device_secret = device.load_or_create(opts)
+	return M.guest(client, device_id, device_secret)
+end
+
 -- Upgrade the current guest into a full account. Authenticated with the
 -- guest's current access token (sent automatically as Bearer). Replaces
 -- the stored token pair with the upgraded one.

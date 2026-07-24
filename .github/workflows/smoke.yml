@@ -42,7 +42,7 @@ jobs:
       - name: Lua syntax check (all sources)
         run: |
           set -e
-          for f in asobi/*.lua smoke_tests/*.lua test/*.lua; do
+          for f in asobi/*.lua smoke_tests/*.lua test/*.lua example/*.lua; do
             echo "  syntax: $f"
             luac5.4 -p "$f"
           done
@@ -52,6 +52,9 @@ jobs:
 
       - name: Auth test (mocked HTTP -> request shape + token storage)
         run: lua5.4 test/auth.lua
+
+      - name: Device test (guest device-credential helper)
+        run: lua5.4 test/device.lua
 
       - name: Clone sdk_demo_backend
         run: git clone --depth 1 https://github.com/widgrensit/sdk_demo_backend

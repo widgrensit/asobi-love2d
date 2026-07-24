@@ -24,6 +24,7 @@ my_game/
 └── asobi/
     ├── init.lua
     ├── auth.lua
+    ├── device.lua
     ├── http.lua
     ├── json.lua
     ├── matchmaker.lua
@@ -111,6 +112,7 @@ Synchronous. Returns `(data, err)` — `err` is `nil` on success or `{status_cod
 asobi.auth.register(client, username, password, display_name)
 asobi.auth.login(client, username, password)
 asobi.auth.guest(client, device_id, device_secret)
+asobi.auth.guest_device(client, opts)   -- managed device credentials (see below)
 asobi.auth.upgrade_guest(client, username, password)
 asobi.auth.refresh(client)
 asobi.auth.logout(client)
@@ -141,6 +143,56 @@ Both are synchronous and return `(data, err)` like the other auth calls. Common
 error codes: `weak_device_secret`, `invalid_device_secret`, `guest_upgraded`,
 `guest_auth_disabled` (guest); `not_an_unclaimed_guest`, `username_taken`
 (upgrade).
+
+#### Guest device (managed credentials)
+
+Don't want to hand-roll base64, the `>=32`-byte secret rule, and persistence?
+`asobi.auth.guest_device` does it for you: it generates a `{device_id,
+device_secret}` pair on first run, stores it in the LÖVE save directory, reuses
+it on every launch, and signs in — all in one synchronous call.
+
+```lua
+-- First run mints + saves a keypair; later runs resume the same guest.
+local data, err = asobi.auth.guest_device(client)
+if err then error("guest sign-in failed: " .. err.error) end
+if data.created then
+    -- brand-new guest — run onboarding
+else
+    -- returning guest
+end
+```
+
+`opts` is optional and forwarded to the credential helper:
+
+```lua
+asobi.auth.guest_device(client, {
+    file = "guest_device",             -- save-file name (default "guest_device")
+    random_bytes = function(n) ... end, -- return n crypto-random bytes (see note)
+    store = { read = fn, write = fn, remove = fn }, -- redirect storage (e.g. keychain)
+})
+```
+
+The credential helper is also usable directly as `asobi.device`:
+
+```lua
+local id, secret = asobi.device.generate(opts)        -- one fresh pair
+local id, secret = asobi.device.load_or_create(opts)  -- persisted, load-or-mint
+asobi.device.clear(opts)   -- forget the guest; next guest_device mints a new one
+```
+
+Use `asobi.device.clear` for "switch account" / "play as someone else" / a local
+"delete my data" action. It is local-only — pair it with `asobi.auth.logout` to
+end the session, or call `upgrade_guest` first if the player wants to keep the
+guest. `device_secret` is standard base64 of at least 32 bytes, exactly what the
+server requires.
+
+> **Entropy note:** LÖVE ships no CSPRNG, so the default secret is best-effort
+> (seeded `love.math.random`) — fine for a persisted guest credential. For
+> higher assurance, pass `opts.random_bytes` backed by a real crypto source.
+
+If you'd rather own storage and key generation entirely, skip the helper and
+pass your own values to `asobi.auth.guest(client, device_id, device_secret)` —
+that primitive is unchanged.
 
 ### `asobi.matchmaker`
 
