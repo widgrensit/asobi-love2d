@@ -8,6 +8,7 @@
 
 local M = {
 	auth = require("asobi.auth"),
+	device = require("asobi.device"),
 	matchmaker = require("asobi.matchmaker"),
 	realtime_module = require("asobi.realtime"),
 }
