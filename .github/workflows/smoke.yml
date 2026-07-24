@@ -14,8 +14,14 @@ name: Smoke
 
 on:
   pull_request:
+    paths-ignore: ['**.md', 'docs/**', 'LICENSE']
   push:
+    paths-ignore: ['**.md', 'docs/**', 'LICENSE']
     branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
 
 jobs:
   smoke:
