@@ -11,6 +11,12 @@ function M.add(client, opts)
 	if type(opts) == "string" then
 		body.mode = opts
 	elseif type(opts) == "table" then
+		-- A positional table (e.g. {"grid2"}) sets opts[1], not opts.mode. That
+		-- would otherwise silently fall through to "default" with no error.
+		assert(
+			opts.mode ~= nil or opts[1] == nil,
+			"asobi.matchmaker: add(opts) needs opts.mode, e.g. {mode = \"grid2\"}, not a positional {\"grid2\"}"
+		)
 		body.mode = opts.mode or "default"
 		if opts.properties then body.properties = opts.properties end
 		if opts.party then body.party = opts.party end

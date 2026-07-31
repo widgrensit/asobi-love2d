@@ -214,6 +214,12 @@ function M:add_to_matchmaker(opts)
 	if type(opts) == "string" then
 		payload.mode = opts
 	elseif type(opts) == "table" then
+		-- A positional table (e.g. {"grid2"}) sets opts[1], not opts.mode. That
+		-- would otherwise silently fall through to "default" with no error.
+		assert(
+			opts.mode ~= nil or opts[1] == nil,
+			"asobi.realtime: add_to_matchmaker(opts) needs opts.mode, e.g. {mode = \"grid2\"}, not a positional {\"grid2\"}"
+		)
 		payload.mode = opts.mode or "default"
 		if opts.properties then payload.properties = opts.properties end
 		if opts.party then payload.party = opts.party end
