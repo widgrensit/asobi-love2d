@@ -56,6 +56,9 @@ jobs:
       - name: Device test (guest device-credential helper)
         run: lua5.4 test/device.lua
 
+      - name: Matchmaker test (mode resolution + positional-table guard)
+        run: lua5.4 test/matchmaker.lua
+
       - name: Clone sdk_demo_backend
         run: git clone --depth 1 https://github.com/widgrensit/sdk_demo_backend
 
