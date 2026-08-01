@@ -40,6 +40,7 @@ local EXPECTED = {
 	["presence.updated"] = "presence_changed",
 	["notification.new"] = "notification",
 	["game.error"] = "game_error",
+	["game.message"] = "game_message",
 	["vote.cast_ok"] = "vote_cast_ok",
 	["vote.veto_ok"] = "vote_veto_ok",
 	["world.tick"] = "world_tick",
@@ -147,6 +148,64 @@ do
 		else
 			pass("game.error -> on(game_error) with callback/script/message intact")
 		end
+	end
+end
+
+-- game.message wraps game.send/2's argument as-is: string, number, or table.
+-- The generic fixture loop above only proves the string case fires; assert
+-- the payload.message value itself survives decode unmodified, including
+-- non-string shapes.
+do
+	local raw = read_file(FIXTURE_DIR .. "/game.message.json")
+	if not raw then
+		fail("could not read game.message.json")
+	else
+		local client = asobi.new({host = "x", port = 1})
+		local payload
+		client.realtime:on("game_message", function(p) payload = p end)
+		client.realtime:_handle_message(raw)
+		if not payload then
+			fail("game.message did not fire on(game_message)")
+		elseif payload.message ~= "jij bent speler nummer 3" then
+			fail("game.message payload.message = " .. tostring(payload.message) ..
+				", want 'jij bent speler nummer 3'")
+		else
+			pass("game.message -> on(game_message) with string message intact")
+		end
+	end
+end
+
+do
+	local raw = '{"type":"game.message","payload":{"message":42}}'
+	local client = asobi.new({host = "x", port = 1})
+	local payload
+	client.realtime:on("game_message", function(p) payload = p end)
+	client.realtime:_handle_message(raw)
+	if not payload then
+		fail("game.message (number) did not fire on(game_message)")
+	elseif payload.message ~= 42 then
+		fail("game.message (number) payload.message = " .. tostring(payload.message) .. ", want 42")
+	else
+		pass("game.message -> on(game_message) with number message intact")
+	end
+end
+
+do
+	local raw = '{"type":"game.message","payload":{"message":{"score":3,"tags":["a","b"]}}}'
+	local client = asobi.new({host = "x", port = 1})
+	local payload
+	client.realtime:on("game_message", function(p) payload = p end)
+	client.realtime:_handle_message(raw)
+	if not payload then
+		fail("game.message (table) did not fire on(game_message)")
+	elseif type(payload.message) ~= "table" then
+		fail("game.message (table) payload.message is a " .. type(payload.message) .. ", want table")
+	elseif payload.message.score ~= 3 then
+		fail("game.message (table) payload.message.score = " .. tostring(payload.message.score) .. ", want 3")
+	elseif payload.message.tags[1] ~= "a" or payload.message.tags[2] ~= "b" then
+		fail("game.message (table) payload.message.tags did not round-trip")
+	else
+		pass("game.message -> on(game_message) with nested table message intact")
 	end
 end
 

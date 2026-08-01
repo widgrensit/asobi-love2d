@@ -240,6 +240,7 @@ client.realtime:send_chat_message(channel, content)
 | `entity_updated`     | `(id, state, changed_fields)` after merge        |
 | `entity_removed`     | `(id)` after merge                               |
 | `tick`               | `(tick, raw_payload)` after entity dispatch      |
+| `game_message`       | `{message}` — whatever the server's `game.send(player, x)` passed, as-is |
 | `error`              | `{reason, ...}`                                  |
 
 > ⚠️ Two events look similar but mean different things:
