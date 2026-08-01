@@ -68,14 +68,22 @@ jobs:
 
       - name: Wait for backend
         run: |
+          # An empty-body POST hits asobi's `register(_Req) -> 400` clause,
+          # which never touches the database - so it can report "up" before
+          # Kura migrations finish running on boot, racing the real
+          # DB-touching registrations in smoke.lua below. Probe with a real,
+          # unique registration instead: 200 (created) or 409 (username
+          # already taken) are only reachable once the insert/uniqueness
+          # check has actually queried Postgres.
           for i in $(seq 1 60); do
             code=$(curl -sS -o /dev/null -w "%{http_code}" \
               -X POST http://localhost:8084/api/v1/auth/register \
               -H "Content-Type: application/json" \
-              -d '{}' 2>/dev/null) || code="000"
+              -d "{\"username\":\"ci_probe_${i}_${RANDOM}\",\"password\":\"ci_probe_pw_12345\"}" \
+              2>/dev/null) || code="000"
             case "$code" in
-              [1-4][0-9][0-9])
-                echo "backend up after ${i}s (probe: $code)"
+              200|409)
+                echo "backend up after ${i}s (probe: $code, DB write confirmed)"
                 exit 0
                 ;;
             esac
