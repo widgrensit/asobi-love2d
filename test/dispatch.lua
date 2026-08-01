@@ -39,6 +39,7 @@ local EXPECTED = {
 	["dm.message"] = "dm_message",
 	["presence.updated"] = "presence_changed",
 	["notification.new"] = "notification",
+	["game.error"] = "game_error",
 	["vote.cast_ok"] = "vote_cast_ok",
 	["vote.veto_ok"] = "vote_veto_ok",
 	["world.tick"] = "world_tick",
@@ -119,6 +120,32 @@ for _, name in ipairs(fixtures) do
 			else
 				fail(mtype .. " did not fire on(" .. expected_cb .. ")")
 			end
+		end
+	end
+end
+
+-- game.error carries the dev-console payload (callback/script/message) the
+-- SDK is meant to surface, not just a bare fire-or-not signal. Assert the
+-- fields actually reach the callback intact.
+do
+	local raw = read_file(FIXTURE_DIR .. "/game.error.json")
+	if not raw then
+		fail("could not read game.error.json")
+	else
+		local client = asobi.new({host = "x", port = 1})
+		local payload
+		client.realtime:on("game_error", function(p) payload = p end)
+		client.realtime:_handle_message(raw)
+		if not payload then
+			fail("game.error did not fire on(game_error)")
+		elseif payload.callback ~= "handle_input" then
+			fail("game.error payload.callback = " .. tostring(payload.callback) .. ", want handle_input")
+		elseif payload.script ~= "match.lua" then
+			fail("game.error payload.script = " .. tostring(payload.script) .. ", want match.lua")
+		elseif payload.message ~= "bad arithmetic + on nil, 1" then
+			fail("game.error payload.message = " .. tostring(payload.message) .. ", want 'bad arithmetic + on nil, 1'")
+		else
+			pass("game.error -> on(game_error) with callback/script/message intact")
 		end
 	end
 end
