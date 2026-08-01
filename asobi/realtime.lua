@@ -36,6 +36,7 @@ local SERVER_EVENTS = {
 	["dm.message"] = "dm_message",
 	["presence.updated"] = "presence_changed",
 	["notification.new"] = "notification",
+	["game.error"] = "game_error",
 	["vote.cast_ok"] = "vote_cast_ok",
 	["vote.veto_ok"] = "vote_veto_ok",
 	["world.tick"] = "world_tick",
