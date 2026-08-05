@@ -15,6 +15,12 @@ local FIXTURE_DIR = "test/fixtures"
 -- For each server wire `type`, the SDK callback name a user binds via
 -- realtime:on(...). Mirrors SERVER_EVENTS in asobi/realtime.lua. Drift
 -- between this map and the SDK is caught by the assertions below.
+-- rpc.ok and rpc.error are replies, not events: they correlate to a pending
+-- call by cid and never reach a callback map. They have fixtures, so they are
+-- named here rather than left looking like an oversight; test/rpc.lua covers
+-- the correlation.
+local CORRELATED = {["rpc.ok"] = true, ["rpc.error"] = true}
+
 local EXPECTED = {
 	["error"] = "error",
 	["session.connected"] = "connected",
@@ -24,6 +30,7 @@ local EXPECTED = {
 	["match.joined"] = "match_joined",
 	["match.left"] = "match_left",
 	["match.finished"] = "match_finished",
+	["match.list"] = "match_list",
 	["match.matchmaker_expired"] = "matchmaker_expired",
 	["match.matchmaker_failed"] = "matchmaker_failed",
 	["match.vote_start"] = "vote_start",
@@ -41,6 +48,8 @@ local EXPECTED = {
 	["notification.new"] = "notification",
 	["game.error"] = "game_error",
 	["game.message"] = "game_message",
+	["module.error"] = "game_error",
+	["module.message"] = "game_message",
 	["vote.cast_ok"] = "vote_cast_ok",
 	["vote.veto_ok"] = "vote_veto_ok",
 	["world.tick"] = "world_tick",
@@ -93,7 +102,7 @@ for _, name in ipairs(fixtures) do fixture_types[name:gsub("%.json$", "")] = tru
 
 for _, name in ipairs(fixtures) do
 	local mtype = name:gsub("%.json$", "")
-	if not EXPECTED[mtype] then
+	if not EXPECTED[mtype] and not CORRELATED[mtype] then
 		fail("fixture '" .. name .. "' has no entry in EXPECTED — add a SDK callback mapping")
 	end
 end

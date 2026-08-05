@@ -21,6 +21,9 @@ local SERVER_EVENTS = {
 	["match.joined"] = "match_joined",
 	["match.left"] = "match_left",
 	["match.finished"] = "match_finished",
+	-- The reply to match.list, which this SDK could send and then had no
+	-- handler for: the corpus carried the fixture and nothing routed it.
+	["match.list"] = "match_list",
 	["match.matchmaker_expired"] = "matchmaker_expired",
 	["match.matchmaker_failed"] = "matchmaker_failed",
 	["match.vote_start"] = "vote_start",
@@ -38,6 +41,12 @@ local SERVER_EVENTS = {
 	["notification.new"] = "notification",
 	["game.error"] = "game_error",
 	["game.message"] = "game_message",
+	-- The current names for the two frames above. The server renamed them so a
+	-- second scripting runtime could use them and kept the old ones as
+	-- aliases; both reach the same handler, so a game need not know which name
+	-- its server is on.
+	["module.error"] = "game_error",
+	["module.message"] = "game_message",
 	["vote.cast_ok"] = "vote_cast_ok",
 	["vote.veto_ok"] = "vote_veto_ok",
 	["world.tick"] = "world_tick",
@@ -80,7 +89,17 @@ function M:_handle_message(raw)
 	if cid and self.pending[cid] then
 		local cb = self.pending[cid]
 		self.pending[cid] = nil
-		if mtype == "error" then
+		if mtype == "rpc.error" then
+			-- The shared error object: {code, message, details}. Passing only
+			-- the message would throw away the code, which is the one part a
+			-- caller can branch on. An empty object still gets a code, or a
+			-- server defect and a domain outcome look identical.
+			local err = payload.error or {}
+			err.code = err.code or "internal"
+			cb(nil, err)
+		elseif mtype == "rpc.ok" then
+			cb(payload.result or {}, nil)
+		elseif mtype == "error" then
 			cb(nil, payload.reason or "unknown error")
 		else
 			cb(payload, nil)
@@ -192,6 +211,28 @@ function M:_send_with_callback(mtype, payload, callback)
 	if callback then self.pending[cid] = callback end
 	local frame = json.encode({type = mtype, payload = payload or {}, cid = cid})
 	self.ws:send(frame)
+end
+
+--- Call an extension's RPC method.
+---
+---   realtime:rpc("quests.claim", {quest_key = "daily"}, function(result, err)
+---     if err then
+---       if err.code == "quests.already_claimed" then ... end
+---     else
+---       print(result.reward)
+---     end
+---   end)
+---
+--- Correlated by cid like every other request, so concurrent calls are safe
+--- and may answer out of order. `params` and `result` are always tables, so
+--- either can grow a field without breaking a shipped game. On failure `err`
+--- is the shared error object; branch on `err.code`, never on `err.message`.
+function M:rpc(method, params, callback)
+	self:_send_with_callback("rpc.call", {
+		protocol = 1,
+		method = method,
+		params = params or {},
+	}, callback)
 end
 
 function M:_send_fire_and_forget(mtype, payload)
