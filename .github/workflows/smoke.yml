@@ -50,6 +50,9 @@ jobs:
       - name: Dispatch test (canonical fixtures -> SDK callbacks)
         run: lua5.4 test/dispatch.lua
 
+      - name: RPC test
+        run: lua5.4 test/rpc.lua
+
       - name: Auth test (mocked HTTP -> request shape + token storage)
         run: lua5.4 test/auth.lua
 
