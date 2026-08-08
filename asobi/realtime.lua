@@ -120,7 +120,22 @@ function M:_handle_message(raw)
 	end
 
 	local event = SERVER_EVENTS[mtype]
-	if event then fire(self, event, payload) end
+	if event then
+		fire(self, event, payload)
+		return
+	end
+
+	-- A Lua script's `game.broadcast(name, payload)` reaches the socket as
+	-- `match.<name>` (or `world.<name>` from a world script), where <name> is
+	-- script-defined and so can never appear in SERVER_EVENTS. Without this
+	-- the frame was dropped silently.
+	local name = mtype:match("^match%.(.+)$")
+	if name then
+		fire(self, "match_event", name, payload)
+		return
+	end
+	name = mtype:match("^world%.(.+)$")
+	if name then fire(self, "world_event", name, payload) end
 end
 
 function M:_apply_entity_update(u)

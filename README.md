@@ -241,12 +241,33 @@ client.realtime:send_chat_message(channel, content)
 | `entity_removed`     | `(id)` after merge                               |
 | `tick`               | `(tick, raw_payload)` after entity dispatch      |
 | `game_message`       | `{message}` — whatever the server's `game.send(player, x)` passed, as-is |
+| `match_event`        | `(event_name, payload)` — the server's `game.broadcast(...)` from a match script |
+| `world_event`        | `(event_name, payload)` — the same from a world script |
 | `error`              | `{reason, ...}`                                  |
 
 > ⚠️ Two events look similar but mean different things:
 >
 > - `match_matched` — server-pushed when the matchmaker pairs you. **This is what the smoke listens for.**
 > - `match_joined` — reply to a client-initiated `match.join`.
+
+A Lua game script pushes to clients two ways. `game.send(player_id, message)`
+targets one player and lands on `game_message`. `game.broadcast(event, payload)`
+goes to everyone in the match or world; the event name is chosen by your script,
+so it lands on the catch-all `match_event` (or `world_event`) with that name as
+the first argument:
+
+```lua
+-- server: game.broadcast("players_total", { value = state.players_total })
+client.realtime:on("match_event", function(event, payload)
+    if event == "players_total" then
+        print("players: " .. tostring(payload.value))
+    end
+end)
+```
+
+Events asobi itself broadcasts (`match.state`, `match.finished`, the
+`match.vote_*` family, and so on) keep their own named callbacks above and do
+not also fire `match_event`.
 
 ## Smoke test
 
