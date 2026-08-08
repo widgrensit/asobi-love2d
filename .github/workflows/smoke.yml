@@ -62,6 +62,9 @@ jobs:
       - name: Matchmaker test (mode resolution + positional-table guard)
         run: lua5.4 test/matchmaker.lua
 
+      - name: Broadcast event test (game.broadcast -> match_event/world_event)
+        run: lua5.4 test/broadcast_event.lua
+
       - name: Clone sdk_demo_backend
         run: git clone --depth 1 https://github.com/widgrensit/sdk_demo_backend
 
