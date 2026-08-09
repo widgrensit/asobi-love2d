@@ -106,7 +106,9 @@ LÖVE runs a single cooperative loop. `client.realtime:update()` does non-blocki
 
 ### `asobi.auth`
 
-Synchronous. Returns `(data, err)` — `err` is `nil` on success or `{status_code, error}` on failure.
+Synchronous. Returns `(data, err)` — `err` is `nil` on success, or on failure
+`{status_code, code, error}` where `code` is the machine-readable half to branch
+on (`"player.confirmation_failed"`) and `error` is a human-readable message.
 
 ```lua
 asobi.auth.register(client, username, password, display_name)
@@ -171,6 +173,34 @@ asobi.auth.guest_device(client, {
     store = { read = fn, write = fn, remove = fn }, -- redirect storage (e.g. keychain)
 })
 ```
+
+### `asobi.players`
+
+```lua
+asobi.players.erase_self(client, password)   -- password is nil for a guest
+```
+
+Erases the signed-in account and everything the server holds for it.
+Irreversible. Clearing the local device credentials does **not** do this — the
+account stays on the server, merely unreachable from that install.
+
+```lua
+-- Guest or provider-only account: no password to confirm with.
+local _, err = asobi.players.erase_self(client)
+if err then error(err.code .. ": " .. err.error) end
+
+-- Account with a password: it must be echoed.
+asobi.players.erase_self(client, "secret123")
+```
+
+A wrong password comes back as `err.code == "player.confirmation_failed"` (403)
+and changes nothing. On success the local session is cleared, because the server
+deleted the token pair in the same transaction; anything afterwards on that
+session is a `401`, which for a retried erase means it already worked. The
+device credentials are *not* cleared, so call `asobi.device.clear()` too if the
+next launch should not sign straight back in as a new guest.
+
+Needs a server carrying `POST /api/v1/players/me/erase`; older ones answer 404.
 
 The credential helper is also usable directly as `asobi.device`:
 

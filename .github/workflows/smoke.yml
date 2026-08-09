@@ -59,6 +59,9 @@ jobs:
       - name: Device test (guest device-credential helper)
         run: lua5.4 test/device.lua
 
+      - name: Players test (account erase + shared error object)
+        run: lua5.4 test/players.lua
+
       - name: Matchmaker test (mode resolution + positional-table guard)
         run: lua5.4 test/matchmaker.lua
 
