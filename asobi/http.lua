@@ -61,10 +61,31 @@ local function request(client, method, path, body, query)
 		return nil, {status_code = 0, error = tostring(code)}
 	end
 	if code >= 400 then
-		local emsg = (decoded and decoded.error) or ("HTTP " .. code)
-		return nil, {status_code = code, error = emsg}
+		return nil, M.error_of(decoded, code)
 	end
 	return decoded or {}, nil
+end
+
+-- asobi answers every failure with a shared error object,
+-- {"error": {"code": ..., "message": ..., "details": {...}}}. `err.error` used
+-- to be that whole table, so `tostring(err.error)` printed "table: 0x..." and
+-- the code you branch on was unreachable without walking the structure by hand.
+-- `err.error` is now the human message, `err.code` the machine-readable half.
+-- A flat legacy string body still maps.
+function M.error_of(decoded, code)
+	local err = {status_code = code, code = "", error = "HTTP " .. code}
+	if type(decoded) ~= "table" then
+		return err
+	end
+	local e = decoded.error
+	if type(e) == "table" then
+		if type(e.code) == "string" then err.code = e.code end
+		if type(e.message) == "string" then err.error = e.message end
+		err.details = e.details
+	elseif type(e) == "string" then
+		err.error = e
+	end
+	return err
 end
 
 function M.get(client, path, query) return request(client, "GET", path, nil, query) end
