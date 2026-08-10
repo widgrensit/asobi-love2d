@@ -1,0 +1,92 @@
+name: Release
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - 'guides/**'
+      - 'LICENSE'
+
+jobs:
+  release:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Determine next version
+        id: version
+        run: |
+          LATEST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
+          if [ -z "$LATEST_TAG" ]; then
+            echo "next=v0.1.0" >> "$GITHUB_OUTPUT"
+            echo "initial=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "latest=$LATEST_TAG" >> "$GITHUB_OUTPUT"
+            echo "initial=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Calculate bumped version
+        if: steps.version.outputs.initial == 'false'
+        uses: orhun/git-cliff-action@v4
+        id: bump
+        with:
+          args: --bumped-version
+
+      - name: Check if version changed
+        if: steps.version.outputs.initial == 'false'
+        id: check
+        env:
+          BUMP_CONTENT: ${{ steps.bump.outputs.content }}
+          LATEST: ${{ steps.version.outputs.latest }}
+        run: |
+          NEXT=$(echo "$BUMP_CONTENT" | tr -d '[:space:]')
+          if [ "$NEXT" = "$LATEST" ] || [ -z "$NEXT" ]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "next=$NEXT" >> "$GITHUB_OUTPUT"
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Resolve version
+        id: resolve
+        env:
+          IS_INITIAL: ${{ steps.version.outputs.initial }}
+          INITIAL_NEXT: ${{ steps.version.outputs.next }}
+          CHECK_NEXT: ${{ steps.check.outputs.next }}
+          CHECK_SKIP: ${{ steps.check.outputs.skip }}
+        run: |
+          if [ "$IS_INITIAL" = "true" ]; then
+            echo "next=$INITIAL_NEXT" >> "$GITHUB_OUTPUT"
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "next=$CHECK_NEXT" >> "$GITHUB_OUTPUT"
+            echo "skip=$CHECK_SKIP" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Generate changelog
+        if: steps.resolve.outputs.skip == 'false'
+        uses: orhun/git-cliff-action@v4
+        id: changelog
+        with:
+          args: --unreleased --strip header --tag ${{ steps.resolve.outputs.next }}
+
+      - name: Create tag and release
+        if: steps.resolve.outputs.skip == 'false'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CHANGELOG: ${{ steps.changelog.outputs.content }}
+          TAG: ${{ steps.resolve.outputs.next }}
+        run: |
+          if git ls-remote --tags origin | grep -q "refs/tags/$TAG$"; then
+            echo "Tag $TAG already exists"
+            exit 0
+          fi
+          git tag "$TAG"
+          git push origin "$TAG"
+          gh release create "$TAG" --title "$TAG" --notes "$CHANGELOG"

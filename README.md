@@ -32,6 +32,8 @@ my_game/
     └── websocket.lua
 ```
 
+Take `asobi/` from a tagged release rather than `main` - `main` is unstable. See [releases](https://github.com/widgrensit/asobi-love2d/releases) for available versions.
+
 LÖVE bundles `luasocket` so HTTP and WebSocket transport work out of the box. For HTTPS / `wss://` you need `luasec` on the path (LÖVE does not bundle it).
 
 ## Quick Start
