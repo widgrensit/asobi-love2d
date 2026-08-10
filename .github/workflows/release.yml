@@ -12,12 +12,46 @@ on:
 jobs:
   release:
     runs-on: ubuntu-24.04
+    timeout-minutes: 45
     permissions:
       contents: write
+      checks: read
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+
+      # A red main must not be tagged. This job starts alongside the test
+      # workflows rather than after them, so wait for every other check on this
+      # commit and refuse to tag unless they all passed.
+      #
+      # Fail closed when no checks are found: every workflow that runs on a push
+      # to main ignores a subset of the paths ignored above, so any change that
+      # reaches this job reached them too. No checks means something is wrong,
+      # not that there was nothing to run.
+      - name: Require green checks on this commit
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SHA: ${{ github.sha }}
+        run: |
+          for _ in $(seq 1 90); do
+            RUNS=$(gh api --paginate \
+              "repos/$GITHUB_REPOSITORY/commits/$SHA/check-runs" \
+              -q '.check_runs[] | select(.name != "release") | "\(.status):\(.conclusion) \(.name)"')
+            if [ -n "$RUNS" ] && ! printf '%s\n' "$RUNS" | grep -qv '^completed:'; then
+              FAILED=$(printf '%s\n' "$RUNS" | grep -Ev '^completed:(success|skipped|neutral) ' || true)
+              if [ -n "$FAILED" ]; then
+                echo "Not tagging $SHA - these checks did not pass:"
+                printf '%s\n' "$FAILED"
+                exit 1
+              fi
+              echo "All checks green on $SHA"
+              exit 0
+            fi
+            sleep 20
+          done
+          echo "Timed out waiting for checks on $SHA"
+          exit 1
 
       - name: Determine next version
         id: version
