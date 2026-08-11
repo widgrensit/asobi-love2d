@@ -171,6 +171,7 @@ end
 ```lua
 asobi.auth.guest_device(client, {
     file = "guest_device",             -- save-file name (default "guest_device")
+    device_id = "my-stable-id",        -- supply your own id; the SDK still makes the secret
     random_bytes = function(n) ... end, -- return n crypto-random bytes (see note)
     store = { read = fn, write = fn, remove = fn }, -- redirect storage (e.g. keychain)
 })
@@ -218,9 +219,55 @@ end the session, or call `upgrade_guest` first if the player wants to keep the
 guest. `device_secret` is standard base64 of at least 32 bytes, exactly what the
 server requires.
 
-> **Entropy note:** LÖVE ships no CSPRNG, so the default secret is best-effort
-> (seeded `love.math.random`) — fine for a persisted guest credential. For
-> higher assurance, pass `opts.random_bytes` backed by a real crypto source.
+**Entropy note:** LÖVE ships no CSPRNG, so the default secret is best-effort
+(seeded `love.math.random`) — fine for a persisted guest credential on desktop.
+For higher assurance, pass `opts.random_bytes` backed by a real crypto source.
+
+The default source first tries `/dev/urandom`, which is a real CSPRNG on Linux
+and macOS — and, since Emscripten backs that path with `crypto.getRandomValues`,
+possibly under love.js too. Where it is unavailable (Windows, and any love.js
+build without it) the seeded PRNG takes over.
+
+**On web, verify which one you got, and pass `opts.random_bytes` if the seeded
+path is in play.** The seeded fallback is much weaker in a browser than on
+desktop: `ptr_entropy` depends on ASLR, which wasm linear memory does not have,
+and `love.timer.getTime` rides `performance.now()`, which browsers coarsen. What
+is left is `os.time()` at whole-second resolution, so two players who open the
+game in the same second can be issued the same `device_id` — and end up sharing
+one account. The SDK prints a warning at credential-mint time when it lands on
+that path on web, so watch the console on first run.
+
+As a backstop, `guest_device` verifies every freshly minted credential against
+the server's `created` flag. A brand-new `device_id` the server says already
+existed is evidence of a duplicate, so the SDK erases it and re-mints, up to
+twice. That usually resolves it: the RNG is seeded once per process, so
+re-minting draws the *next* value from the stream rather than the same one, and
+tabs opened in the same second converge on distinct pairs. A resolved collision
+is invisible to your game.
+
+If all three attempts collide the source is genuinely broken. The SDK then warns,
+sets `client.device_collision = true`, and on web erases the credential so the
+install re-mints next launch rather than staying merged. Off web the flag is
+raised but the credential is left alone, because "no `created` field" is also
+what a backend that never sends it looks like. The sign-in still succeeds — the
+player is authenticated — so treat the flag as a signal to fix your entropy
+source, not as self-healing: every re-mint leaves another orphan guest on the
+server, counting against its unlinked-guest cap.
+
+The canary only runs inside `guest_device`. If you call `asobi.device.load_or_create`
+and `asobi.auth.guest` yourself, you own this check.
+
+```lua
+local data, err = asobi.auth.guest_device(client)
+if client.device_collision then
+    -- Retries did not escape it: this player is sharing an account.
+    -- Supply opts.random_bytes.
+end
+```
+
+Credentials stored by v0.1.0 or earlier are discarded on web at first launch,
+since they may be one of these duplicates. Desktop builds were never affected
+and keep their stored pair.
 
 If you'd rather own storage and key generation entirely, skip the helper and
 pass your own values to `asobi.auth.guest(client, device_id, device_secret)` —

@@ -14,6 +14,12 @@
 -- (seeded love.math.random / math.random) - fine for a persisted guest
 -- credential. For higher assurance, pass opts.random_bytes backed by a crypto
 -- source (e.g. an OS keychain or a native extension).
+--
+-- On web (love.js) that best-effort seed is materially weaker than on desktop -
+-- see the seed comment below - and there is no CSPRNG to fall back on. The
+-- backstop there is the collision canary in asobi.auth.guest_device, which
+-- detects a duplicate device_id from the server's own response rather than
+-- trusting the RNG.
 
 local M = {}
 
@@ -75,19 +81,102 @@ local function ptr_entropy()
 	return acc
 end
 
+-- True on love.js, where the seeded fallback is much worse than on desktop:
+-- ptr_entropy() is a no-op because wasm linear memory is deterministic (no
+-- ASLR), and love.timer.getTime() rides performance.now(), which browsers
+-- coarsen to 100us-1ms and which reads nearly the same in every tab this early
+-- in startup. What survives is os.time() at whole-second resolution, so two
+-- tabs opened in the same second can mint the same device_id - and that pair
+-- then persists.
+--
+-- Detected by exclusion rather than by matching "Web". The cost is lopsided: a
+-- false positive re-mints one guest identity once, while a false negative
+-- leaves an install permanently sharing an account AND disarms the canary (a
+-- missed invalidation means the pair resumes, so `minted` is false and the
+-- check never runs). Older or re-packaged love.js builds have been reported
+-- returning "Linux", and stock LÖVE answers "Unknown" for anything it does not
+-- recognise, so anything that is not a known native platform is treated as web.
+local NATIVE_OS = {
+	Windows = true,
+	["OS X"] = true,
+	Linux = true,
+	Android = true,
+	iOS = true,
+}
+
+local function is_web()
+	if not (love and love.system and love.system.getOS) then
+		return false -- no LÖVE at all: unit tests, plain Lua host.
+	end
+	return not NATIVE_OS[love.system.getOS()]
+end
+
+-- Internal; exposed for asobi.auth's canary and the platform tests.
+M._is_web = is_web
+
+-- Emscripten backs /dev/urandom with crypto.getRandomValues, and love.js keeps
+-- Lua's io library, so this may well be a real CSPRNG on web too - it is worth
+-- trying before falling back to a seeded PRNG. Same call upgrades Linux and
+-- macOS desktop off the seeded path entirely. Windows has no such device and
+-- falls through.
+local urandom_checked, urandom_ok = false, false
+
+local function urandom_bytes(n)
+	if urandom_checked and not urandom_ok then
+		return nil
+	end
+	local ok, f = pcall(io.open, "/dev/urandom", "rb")
+	if not ok or not f then
+		urandom_checked, urandom_ok = true, false
+		return nil
+	end
+	local read_ok, bytes = pcall(f.read, f, n)
+	pcall(f.close, f)
+	if not read_ok or type(bytes) ~= "string" or #bytes ~= n then
+		urandom_checked, urandom_ok = true, false
+		return nil
+	end
+	urandom_checked, urandom_ok = true, true
+	return bytes
+end
+
+-- math.randomseed is srand((int)x) on Lua 5.1, so a seed above INT32_MAX is
+-- narrowed on the way in - and under wasm that conversion saturates to a
+-- constant rather than wrapping. love.math.setRandomSeed takes the full value,
+-- so the seed is computed wide and narrowed only at the math.randomseed call
+-- site; clamping it here too would throw away entropy on the path that was
+-- never broken.
+local SEED_MOD = 2147483647
+
+local function mix(acc, value)
+	return (acc * 31 + value) % SEED_MOD
+end
+
+local function compute_seed()
+	local t = mix(os.time() % SEED_MOD, ptr_entropy())
+	t = mix(t, math.floor((os.clock() * 1000000) % SEED_MOD))
+	if love and love.timer and love.timer.getTime then
+		t = mix(t, math.floor((love.timer.getTime() * 1000000) % SEED_MOD))
+	end
+	-- Widen again so the setRandomSeed path gets more than 31 bits.
+	return t + (os.time() % 1000000) * SEED_MOD
+end
+
 local seeded = false
 local function default_random_bytes(n)
+	local os_bytes = urandom_bytes(n)
+	if os_bytes then
+		return os_bytes
+	end
 	local rand = (love and love.math and love.math.random) or math.random
 	if not seeded then
 		seeded = true
-		local t = (os.time() % 1000000) * 1000000 + ptr_entropy()
-		if love and love.timer and love.timer.getTime then
-			t = t + math.floor((love.timer.getTime() * 1000000) % 1000000)
-		end
+		local t = compute_seed()
 		if love and love.math and love.math.setRandomSeed then
 			love.math.setRandomSeed(t)
 		else
-			math.randomseed(t)
+			-- Narrow here, not in compute_seed: srand((int)x) saturates under wasm.
+			math.randomseed(t % SEED_MOD)
 		end
 	end
 	local out = {}
@@ -96,6 +185,8 @@ local function default_random_bytes(n)
 	end
 	return table.concat(out)
 end
+
+local warned_web_rng = false
 
 -- Generate a fresh {device_id, device_secret} pair. opts.random_bytes(n) may
 -- supply bytes from a stronger source; opts.device_id fixes the id explicitly.
@@ -109,26 +200,74 @@ function M.generate(opts)
 		type(secret_bytes) == "string" and #secret_bytes >= 32,
 		"asobi.device: random_bytes(32) must return at least 32 bytes"
 	)
+	-- After the first draw, so urandom_ok reflects a real probe. Warn at mint
+	-- time rather than only after a collision: a solo dev testing their own game
+	-- never trips the guest_device canary and would otherwise ship a build that
+	-- merges their players into shared accounts with no warning anywhere. Stays
+	-- quiet on a love.js build that does expose /dev/urandom.
+	if opts.random_bytes == nil and not urandom_ok and is_web() and not warned_web_rng then
+		warned_web_rng = true
+		print(
+			"[asobi] WARNING: no OS random source on this platform, and the seeded fallback is "
+				.. "not random enough on web - players opening the game in the same second can "
+				.. "be issued the same device_id and share an account. Pass opts.random_bytes "
+				.. "backed by crypto.getRandomValues."
+		)
+	end
 	local device_id = opts.device_id or base64(rand(16))
 	local device_secret = base64(secret_bytes:sub(1, 32))
 	return device_id, device_secret
 end
 
 local SAVE_FILE = "guest_device"
+-- Records written before the seed fix carry no version line. On web those were
+-- minted from a near-constant seed, so a stored v1 pair there is very likely
+-- shared with other players and must be discarded - otherwise an affected
+-- install resumes the shared guest forever and the fix reaches nobody.
+local SAVE_HEADER = "asobi-device-v2"
 
 -- device_id and device_secret are standard base64 (no newline in the alphabet),
--- so a two-line record round-trips without escaping or a JSON dependency.
+-- so a line-per-field record round-trips without escaping or a JSON dependency.
 local function serialize(id, secret)
-	return id .. "\n" .. secret .. "\n"
+	return SAVE_HEADER .. "\n" .. id .. "\n" .. secret .. "\n"
 end
 
+-- Returns id, secret, versioned. A v1 record is two lines with no header.
 local function deserialize(s)
-	local id, secret = s:match("^([^\n]*)\n([^\n]*)")
-	return id, secret
+	local header, id, secret = s:match("^([^\n]*)\n([^\n]*)\n([^\n]*)")
+	if header == SAVE_HEADER then
+		return id, secret, true
+	end
+	-- A record that starts with the header but did not match the 3-line shape is
+	-- a truncated v2 write, not a v1 record. Falling through would parse the
+	-- header line itself as the device_id and the id as the secret, and that
+	-- garbage pair would then load cleanly on every launch.
+	if s:match("^([^\n]*)") == SAVE_HEADER then
+		return nil, nil, false
+	end
+	local v1_id, v1_secret = s:match("^([^\n]*)\n([^\n]*)")
+	return v1_id, v1_secret, false
 end
 
-local function valid(id, secret)
-	return type(id) == "string" and id ~= "" and type(secret) == "string" and secret ~= ""
+-- Standard base64 of >= 32 bytes is >= 44 chars from the RFC 4648 alphabet.
+-- Checking the shape of what we stored makes a corrupt or truncated record
+-- self-healing: it fails validation and the next launch re-mints, instead of
+-- being re-presented forever as an opaque weak_device_secret 4xx.
+local function well_formed_secret(secret)
+	return type(secret) == "string" and #secret >= 44 and secret:match("^[A-Za-z0-9+/]+=*$") ~= nil
+end
+
+local function valid(id, secret, versioned)
+	if not (type(id) == "string" and id ~= "" and well_formed_secret(secret)) then
+		return false
+	end
+	-- Scoped to web on purpose: the weak seed is a love.js-only problem, so a
+	-- desktop install's unversioned pair is fine and discarding it would log out
+	-- a player who was never affected.
+	if is_web() and not versioned then
+		return false
+	end
+	return true
 end
 
 -- Storage is swappable: pass opts.store = {read, write, remove} to redirect
@@ -161,20 +300,24 @@ local function get_store(opts)
 end
 
 -- Load the persisted pair, or generate + persist one on first run. Returns
--- device_id, device_secret. With no store available (no LÖVE, no opts.store)
--- it generates an in-memory pair without persisting.
+-- device_id, device_secret, minted - where `minted` is true if this call
+-- generated a brand-new pair rather than resuming a stored one. guest_device
+-- uses that to tell a fresh credential apart from a resumed one, which is what
+-- makes the collision canary possible. With no store available (no LÖVE, no
+-- opts.store) it generates an in-memory pair without persisting.
 function M.load_or_create(opts)
 	opts = opts or {}
 	local store = get_store(opts)
 	if not store then
-		return M.generate(opts)
+		local id, secret = M.generate(opts)
+		return id, secret, true
 	end
 	local name = opts.file or SAVE_FILE
 	local contents = store.read(name)
 	if contents then
-		local id, secret = deserialize(contents)
-		if valid(id, secret) then
-			return id, secret
+		local id, secret, versioned = deserialize(contents)
+		if valid(id, secret, versioned) then
+			return id, secret, false
 		end
 	end
 	local id, secret = M.generate(opts)
@@ -184,7 +327,7 @@ function M.load_or_create(opts)
 	if not store.write(name, serialize(id, secret)) then
 		print("[asobi] warning: could not persist guest device credentials; a new guest may be created next launch")
 	end
-	return id, secret
+	return id, secret, true
 end
 
 -- Erase the stored credentials so the next load_or_create / guest_device mints
