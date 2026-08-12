@@ -119,7 +119,7 @@ asobi.auth.guest(client, device_id, device_secret)
 asobi.auth.guest_device(client, opts)   -- managed device credentials (see below)
 asobi.auth.upgrade_guest(client, username, password)
 asobi.auth.refresh(client)
-asobi.auth.logout(client)
+asobi.auth.logout(client)               -- revokes the tokens server-side, then clears them locally
 ```
 
 #### Guest / anonymous auth
@@ -297,12 +297,25 @@ client.realtime:remove_from_matchmaker(ticket_id)
 client.realtime:send_match_input(input_table)
 client.realtime:join_match(match_id)
 client.realtime:leave_match()
+client.realtime:list_matches({mode = "demo"})      -- reply on("match_list")
+client.realtime:cast_vote(vote_id, option_id)
+client.realtime:cast_veto(vote_id)
+client.realtime:list_worlds({mode = "demo"})       -- reply on("world_list")
+client.realtime:create_world(mode, callback)       -- always a fresh instance
 client.realtime:find_or_create_world(mode, callback)
 client.realtime:join_world(world_id, callback)
 client.realtime:send_world_input(input_table)
 client.realtime:leave_world()
+client.realtime:join_chat(channel)
 client.realtime:send_chat_message(channel, content)
+client.realtime:leave_chat(channel)
+client.realtime:send_dm(recipient_id, content)
+client.realtime:update_presence("online")
 ```
+
+Listing filters are validated server-side: `mode` (string), `has_capacity`
+(boolean) and, for matches only, `joinable` (boolean). A wrong type is rejected
+with `invalid_<name>_filter` rather than silently ignored.
 
 #### Events
 

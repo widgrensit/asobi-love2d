@@ -68,6 +68,9 @@ jobs:
       - name: Broadcast event test (game.broadcast -> match_event/world_event)
         run: lua5.4 test/broadcast_event.lua
 
+      - name: Send test (realtime wrappers -> wire type + payload)
+        run: lua5.4 test/send.lua
+
       - name: Clone sdk_demo_backend
         run: git clone --depth 1 https://github.com/widgrensit/sdk_demo_backend
 
