@@ -101,5 +101,39 @@ do
 	check(client.session_token == "acc-1", "upgrade_guest leaves session_token on error")
 end
 
+-- logout: revokes server-side, then clears local state.
+do
+	mock({success = true}, nil)
+	last = nil
+	local client = {session_token = "acc-1", refresh_token = "ref-1", player_id = "p-1"}
+	local _, err = auth.logout(client)
+
+	check(err == nil, "logout returns no error on success")
+	check(last ~= nil and last.path == "/api/v1/auth/logout", "logout posts to /api/v1/auth/logout")
+	check(last.body.refresh_token == "ref-1", "logout sends refresh_token so the whole family dies")
+	check(client.session_token == nil, "logout clears session_token")
+	check(client.refresh_token == nil, "logout clears refresh_token")
+	check(client.player_id == nil, "logout clears player_id")
+end
+
+-- logout: a failed revoke still clears local state.
+do
+	mock(nil, {status_code = 500, error = "internal"})
+	local client = {session_token = "acc-1", refresh_token = "ref-1", player_id = "p-1"}
+	local _, err = auth.logout(client)
+
+	check(err ~= nil and err.status_code == 500, "logout propagates the server error")
+	check(client.session_token == nil, "logout clears session_token even when the call fails")
+	check(client.refresh_token == nil, "logout clears refresh_token even when the call fails")
+end
+
+-- logout: nothing to revoke means no request at all.
+do
+	mock({success = true}, nil)
+	last = nil
+	auth.logout({})
+	check(last == nil, "logout skips the request when there are no tokens")
+end
+
 print(string.format("[auth] %d passed, %d failed", pass_count, fail_count))
 if fail_count > 0 then os.exit(1) end

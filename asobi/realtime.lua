@@ -267,6 +267,24 @@ function M:leave_match()
 	self:_send("match.leave", {})
 end
 
+-- Browse the match lobby. `filters` is optional and takes `mode` (string),
+-- `has_capacity` (boolean) and `joinable` (boolean); the server validates
+-- each and rejects the whole request with invalid_<name>_filter on a wrong
+-- type. Unlike the other two, `joinable = false` is a real filter ("show me
+-- the matches that have closed") rather than the absence of one. The reply
+-- arrives as on("match_list").
+function M:list_matches(filters)
+	self:_send("match.list", filters or {})
+end
+
+function M:cast_vote(vote_id, option_id)
+	self:_send("vote.cast", {vote_id = vote_id, option_id = option_id})
+end
+
+function M:cast_veto(vote_id)
+	self:_send("vote.veto", {vote_id = vote_id})
+end
+
 function M:add_to_matchmaker(opts)
 	local payload = {mode = "default"}
 	if type(opts) == "string" then
@@ -297,8 +315,33 @@ function M:send_chat_message(channel_id, content)
 	self:_send_fire_and_forget("chat.send", {channel_id = channel_id, content = content})
 end
 
+function M:leave_chat(channel_id)
+	self:_send("chat.leave", {channel_id = channel_id})
+end
+
+function M:send_dm(recipient_id, content)
+	self:_send("dm.send", {recipient_id = recipient_id, content = content})
+end
+
+function M:update_presence(status)
+	self:_send("presence.update", {status = status or "online"})
+end
+
 function M:send_world_input(input)
 	self:_send_fire_and_forget("world.input", input)
+end
+
+-- Browse the world lobby. `filters` takes `mode` and `has_capacity`; worlds
+-- have no joinable flag and ignore that key. The reply arrives as
+-- on("world_list").
+function M:list_worlds(filters)
+	self:_send("world.list", filters or {})
+end
+
+-- Create a fresh world instance and join it, rather than joining whichever
+-- one happens to have room. Use find_or_create_world for the latter.
+function M:create_world(mode, callback)
+	self:_send_with_callback("world.create", {mode = mode}, callback)
 end
 
 function M:find_or_create_world(mode, callback)

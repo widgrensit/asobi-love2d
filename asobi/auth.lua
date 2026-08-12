@@ -143,10 +143,25 @@ function M.refresh(client)
 	return data, err
 end
 
+-- Revoke the tokens server-side, then clear local state. Sending the refresh
+-- token kills the whole refresh family and the access token in the
+-- Authorization header is revoked too, so a "logout" no longer leaves live
+-- credentials behind. Unauthenticated on the server, because it accepts a
+-- token that may already have expired.
+--
+-- The local clear happens even when the call fails: a player who asked to be
+-- logged out must not be left holding tokens because the network was down.
 function M.logout(client)
+	local data, err
+	if client.session_token or client.refresh_token then
+		data, err = http.post(client, "/api/v1/auth/logout", {
+			refresh_token = client.refresh_token,
+		})
+	end
 	client.session_token = nil
 	client.refresh_token = nil
 	client.player_id = nil
+	return data, err
 end
 
 return M
