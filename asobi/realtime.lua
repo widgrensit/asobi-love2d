@@ -55,6 +55,11 @@ local SERVER_EVENTS = {
 	["vote.cast_ok"] = "vote_cast_ok",
 	["vote.veto_ok"] = "vote_veto_ok",
 	["world.tick"] = "world_tick",
+	-- Core's client-side-prediction ack {tick, seq}: the highest world.input
+	-- seq the server has consumed for you as of tick. The SERVER_EVENTS lookup
+	-- runs before the world.* catch-all below, which would otherwise surface
+	-- this as the generic world_event named "ack".
+	["world.ack"] = "world_ack",
 	["world.terrain"] = "world_terrain",
 	["world.list"] = "world_list",
 	["world.joined"] = "world_joined",
@@ -266,8 +271,10 @@ function M:rpc(method, params, callback)
 	}, callback)
 end
 
-function M:_send_fire_and_forget(mtype, payload)
-	local frame = json.encode({type = mtype, payload = payload or {}})
+function M:_send_fire_and_forget(mtype, payload, seq)
+	-- seq rides as a top-level sibling of payload, never nested. Absent when
+	-- nil: a nil key is omitted by the table constructor.
+	local frame = json.encode({type = mtype, payload = payload or {}, seq = seq})
 	self.ws:send(frame)
 end
 
@@ -343,8 +350,12 @@ function M:update_presence(status)
 	self:_send("presence.update", {status = status or "online"})
 end
 
-function M:send_world_input(input)
-	self:_send_fire_and_forget("world.input", input)
+-- Send input to your world. Pass `seq` - a per-input counter your client
+-- increments - to opt into world.ack reconciliation; the server echoes the
+-- highest seq it has consumed back on on("world_ack"). Kept numeric and sent
+-- as a top-level sibling of payload.
+function M:send_world_input(input, seq)
+	self:_send_fire_and_forget("world.input", input, seq)
 end
 
 -- Browse the world lobby. `filters` takes `mode` and `has_capacity`; worlds

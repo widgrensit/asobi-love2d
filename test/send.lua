@@ -11,6 +11,7 @@
 package.path = "asobi/?.lua;asobi/?/init.lua;" .. package.path
 
 local realtime = require("asobi.realtime")
+local json = require("asobi.json")
 
 local fail_count = 0
 local pass_count = 0
@@ -121,6 +122,36 @@ do
 	rt:list_matches()
 	rt:_handle_message('{"type":"match.list","cid":"1","payload":{"matches":[]}}')
 	check(fired ~= nil, "match.list: reply fires on(match_list)")
+end
+
+-- world.input carries an optional per-input seq for world.ack prediction. It
+-- rides as a top-level sibling of payload, never nested inside it, and stays
+-- numeric.
+do
+	local rt, last_frame = new_rt()
+	rt:send_world_input({x = 1, y = 2}, 7)
+	local frame = last_frame()
+	check(frame ~= nil and frame:find('"type":"world.input"', 1, true) ~= nil,
+		"world.input (seq): sends type world.input")
+	check(frame ~= nil and frame:find('"seq":7', 1, true) ~= nil, "world.input (seq): stamps seq numerically")
+	local decoded = frame and json.decode(frame)
+	check(decoded ~= nil and decoded.seq == 7, "world.input (seq): seq is a top-level sibling of payload")
+	check(decoded ~= nil and decoded.payload and decoded.payload.seq == nil,
+		"world.input (seq): seq is never nested inside payload")
+	check(decoded ~= nil and decoded.payload and decoded.payload.x == 1 and decoded.payload.y == 2,
+		"world.input (seq): input reaches payload intact")
+end
+
+do
+	local rt, last_frame = new_rt()
+	rt:send_world_input({x = 1})
+	local frame = last_frame()
+	check(frame ~= nil and frame:find('"seq"', 1, true) == nil,
+		"world.input (no seq): omits seq entirely when not provided")
+	local decoded = frame and json.decode(frame)
+	check(decoded ~= nil and decoded.seq == nil, "world.input (no seq): no top-level seq key")
+	check(decoded ~= nil and decoded.payload and decoded.payload.x == 1,
+		"world.input (no seq): input reaches payload")
 end
 
 print(string.format("[send] %d passed, %d failed", pass_count, fail_count))
