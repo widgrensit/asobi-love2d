@@ -335,6 +335,7 @@ with `invalid_<name>_filter` rather than silently ignored.
 | `game_message`       | `{message}` — whatever the server's `game.send(player, x)` passed, as-is |
 | `match_event`        | `(event_name, payload)` — the server's `game.broadcast(...)` from a match script |
 | `world_event`        | `(event_name, payload)` — the same from a world script |
+| `module_event`       | `{module, event, data}` — a named push from an extension; route on `event` |
 | `error`              | `{reason, ...}`                                  |
 
 > ⚠️ Two events look similar but mean different things:
@@ -360,6 +361,22 @@ end)
 Events asobi itself broadcasts (`match.state`, `match.finished`, the
 `match.vote_*` family, and so on) keep their own named callbacks above and do
 not also fire `match_event`.
+
+An installed extension pushes named events on `module_event`. The whole payload
+`{module, event, data}` reaches the callback; the inner `event` name is yours to
+route on, and the SDK never gates on it, so a new event name works without an
+SDK update:
+
+```lua
+client.realtime:on("module_event", function(payload)
+    if payload.event == "quests.completed" then
+        print("quest " .. payload.data.quest_id .. " -> " .. tostring(payload.data.reward))
+    end
+end)
+```
+
+`on(event, fn)` registers a callback and **appends** it: bind the same event
+twice and both callbacks fire, in registration order. There is no `off`.
 
 ## Smoke test
 

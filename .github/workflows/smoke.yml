@@ -68,6 +68,12 @@ jobs:
       - name: Broadcast event test (game.broadcast -> match_event/world_event)
         run: lua5.4 test/broadcast_event.lua
 
+      - name: Module event test (module.event -> module_event, whole payload)
+        run: lua5.4 test/module_event.lua
+
+      - name: Multi-handler test (multiple handlers per event, in order)
+        run: lua5.4 test/multi_handler.lua
+
       - name: Send test (realtime wrappers -> wire type + payload)
         run: lua5.4 test/send.lua
 
