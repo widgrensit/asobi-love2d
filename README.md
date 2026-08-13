@@ -488,10 +488,10 @@ A crossing delivers fresh snapshots too. Moving recomputes the ring, every
 loaded zone in the band that has just entered it is subscribed, and each of
 those holding entities replays a full snapshot: at the default `view_radius` of
 1 an orthogonal step swaps three zones out for three in, so expect a burst of
-snapshot frames on every boundary you cross. The destination zone is the one exception, and only
-because at radius 1 it was already a neighbour in the old ring, so re-affirming
-that held subscription sends nothing. Do not read that single no-op as the
-crossing being quiet.
+snapshot frames on every boundary you cross. The destination zone is the one
+exception, and only because at radius 1 it was already a neighbour in the old
+ring, so re-affirming that held subscription sends nothing. Do not read that
+single no-op as the crossing being quiet.
 
 A zone that drops out of your ring sends `op = "r"` for each of its entities.
 Subscribing to a zone that holds no entities skips the entity snapshot, but the
