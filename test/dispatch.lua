@@ -50,6 +50,7 @@ local EXPECTED = {
 	["game.message"] = "game_message",
 	["module.error"] = "game_error",
 	["module.message"] = "game_message",
+	["module.event"] = "module_event",
 	["vote.cast_ok"] = "vote_cast_ok",
 	["vote.veto_ok"] = "vote_veto_ok",
 	["world.tick"] = "world_tick",

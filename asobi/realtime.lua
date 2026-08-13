@@ -47,6 +47,11 @@ local SERVER_EVENTS = {
 	-- its server is on.
 	["module.error"] = "game_error",
 	["module.message"] = "game_message",
+	-- A named push from an extension: the whole payload {module, event, data}
+	-- reaches on("module_event") and the app routes on payload.event. Unlike
+	-- the two frames above it has no game.* twin, and its inner event name is
+	-- data rather than a dispatch gate, so it maps to a single callback.
+	["module.event"] = "module_event",
 	["vote.cast_ok"] = "vote_cast_ok",
 	["vote.veto_ok"] = "vote_veto_ok",
 	["world.tick"] = "world_tick",
@@ -71,12 +76,23 @@ function M.new(client)
 end
 
 function M:on(event, callback)
-	self.callbacks[event] = callback
+	local handlers = self.callbacks[event]
+	if not handlers then
+		handlers = {}
+		self.callbacks[event] = handlers
+	end
+	handlers[#handlers + 1] = callback
 end
 
 local function fire(self, event, ...)
-	local cb = self.callbacks[event]
-	if cb then cb(...) end
+	local handlers = self.callbacks[event]
+	if not handlers then return end
+	-- Snapshot the count so a handler that registers another mid-dispatch
+	-- fires on the next frame, not this one.
+	local n = #handlers
+	for i = 1, n do
+		handlers[i](...)
+	end
 end
 
 function M:_handle_message(raw)
