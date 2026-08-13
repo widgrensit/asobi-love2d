@@ -71,6 +71,9 @@ jobs:
       - name: Module event test (module.event -> module_event, whole payload)
         run: lua5.4 test/module_event.lua
 
+      - name: World ack test (world.ack -> world_ack, tick/seq + catch-all reclaim)
+        run: lua5.4 test/world_ack.lua
+
       - name: Multi-handler test (multiple handlers per event, in order)
         run: lua5.4 test/multi_handler.lua
 

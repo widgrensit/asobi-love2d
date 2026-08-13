@@ -54,6 +54,7 @@ local EXPECTED = {
 	["vote.cast_ok"] = "vote_cast_ok",
 	["vote.veto_ok"] = "vote_veto_ok",
 	["world.tick"] = "world_tick",
+	["world.ack"] = "world_ack",
 	["world.terrain"] = "world_terrain",
 	["world.list"] = "world_list",
 	["world.joined"] = "world_joined",
