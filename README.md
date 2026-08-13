@@ -504,10 +504,10 @@ The SDK merges all of it for you and then fires `entity_added` /
 **and** `entity_updated`: your own entity's first diff is an add, so an
 `entity_updated`-only handler stays empty and the early acks silently do
 nothing. Copy the fields you reconcile out of `state`, never keep the table
-itself. `entity_updated` hands you the SDK's live table and the SDK mutates it
-in place on the next `"u"` diff, so a stored reference changes under you.
-`entity_added` hands you a table the SDK replaces outright on the next `"a"`
-snapshot for that entity, so a stored reference silently stops updating instead.
+itself. Both callbacks hand you the SDK's stored table for that entity: a `"u"`
+diff merges into it in place, so a reference you kept changes under you, and an
+`"a"` snapshot replaces the stored entry with a fresh table, so a reference you
+kept silently stops updating instead.
 
 ```lua
 local SPEED = 200
