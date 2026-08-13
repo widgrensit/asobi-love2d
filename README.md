@@ -410,26 +410,40 @@ end)
 `payload.seq` is the highest input `seq` the server had consumed for you as of
 `payload.tick`. It is a high-water mark, not a per-input receipt: several inputs
 collapse into one ack, and an input your world script rejects still advances it,
-so a dropped input never strands the client. The ack is per-connection - a
-separate frame beside the shared `world.tick` broadcast, never part of it - and
-it repeats on every broadcast tick you stay subscribed for, including ticks where
-you sent nothing new. Never send a `seq` and you get silence, with no error.
+so a dropped input never strands the client. The ack is per-connection, a
+separate frame beside the shared `world.tick` broadcast and never part of it,
+and it repeats on every broadcast tick you stay subscribed for, including ticks
+where you sent nothing new. Never send a `seq` and you get silence, with no
+error.
+
+Acks pause across a zone crossing. The destination zone holds no recorded seq
+for you until your next seq-stamped input is applied there, so the stream
+resumes one input after the crossing. It heals itself, so keep sending and keep
+buffering: the first ack from the new zone clears the backlog it covers.
 
 Acks land only on broadcast ticks, one every `broadcast_interval` simulation
-ticks (default 3). Set the mode's `broadcast_interval` to 1 for an ack every tick
-- see [world server](https://asobi.dev/docs/world-server).
+ticks (default 3). Set the mode's `broadcast_interval` to 1 for an ack every
+tick, see [world server](https://asobi.dev/docs/world-server).
 
-For a given tick the server sends `world.tick` first and `world.ack` second, on
-the same connection. Prune on the ack and replay after pruning; replaying from
-the `world_tick` or `tick` callback replays against a buffer nothing has pruned
-yet.
+When a broadcast tick produced entity changes, the server sends `world.tick`
+first and `world.ack` second, on the same connection. When nothing changed the
+ack arrives alone, with no `world.tick` in front of it, so an ack is never a
+promise that a tick preceded it. Prune and replay in the `world_ack` handler:
+doing either from the `world_tick` or `tick` callback misses every tick-free
+ack, and replays against a buffer nothing has pruned yet.
 
-Keep `seq` a plain counter starting at 1. The server ignores any `seq` that is
-not an integer in `0 .. 2^53-1` - no ack, no error - and this SDK's JSON encoder
-switches to exponent form (`1e+15`) at 1e15 on a runtime with no integer type,
-which LÖVE's LuaJIT is. Never seed it from a timestamp. `payload.tick` and
-`payload.seq` arrive as plain Lua numbers and compare exactly, so no cast is
-needed.
+Keep `seq` a plain counter starting at 1. A `seq` outside the integers
+`0 .. 2^53-1` is ignored, but the input is not: it is still queued and applied
+to the world exactly as normal, and only its acknowledgement is skipped. If a
+valid seq was already recorded for you, acks keep arriving every broadcast tick
+carrying that older mark, they just stop advancing. Nothing raises an error
+either way.
+
+This SDK's JSON encoder switches to exponent form (`1e+15`) at 1e15 on a runtime
+with no integer type, which LÖVE's LuaJIT is, and the server reads `1e+15` as a
+float rather than an integer, so it falls outside that range. Never seed the
+counter from a timestamp. `payload.tick` and `payload.seq` arrive as plain Lua
+numbers and compare exactly, so no cast is needed.
 
 Needs an asobi server on v0.84.0 or later, and asobi-love2d v0.4.0 or later.
 Older versions of either send no acks and raise no error: `on("world_ack")`
@@ -442,13 +456,19 @@ authoritative state.
 
 That authoritative state is the SDK's merged entity store, not the `world_tick`
 payload. `world.tick` carries entity diffs (`op = "a"` add, `"u"` changed fields
-only, `"r"` removal); only the first one after `world_joined` is a full snapshot.
-The SDK merges them for you and then fires `entity_added` / `entity_updated` /
-`entity_removed`, so seed your copy from `entity_added` **and** `entity_updated`
-- your own entity's first diff is an add, so an `entity_updated`-only handler
-stays empty and the early acks silently do nothing. Copy the fields you
-reconcile: `entity_updated` hands you the SDK's live table for that entity, which
-it mutates in place on the next tick.
+only, `"r"` removal). Every zone subscription delivers a full `op = "a"`
+snapshot of that zone's entities, not just the first one after `world_joined`: a
+zone crossing subscribes you to the zones that newly come into view, and each of
+those delivers its own fresh snapshot. Re-affirming a subscription you already
+hold sends nothing. The ticks in between carry deltas.
+
+The SDK merges all of it for you and then fires `entity_added` /
+`entity_updated` / `entity_removed`, so seed your copy from `entity_added`
+**and** `entity_updated`: your own entity's first diff is an add, so an
+`entity_updated`-only handler stays empty and the early acks silently do
+nothing. Copy the fields you reconcile. Both `entity_added` and `entity_updated`
+hand you the SDK's live table for that entity, and the SDK mutates it in place
+on the next tick.
 
 ```lua
 local SPEED = 200
