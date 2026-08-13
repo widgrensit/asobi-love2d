@@ -304,7 +304,7 @@ client.realtime:list_worlds({mode = "demo"})       -- reply on("world_list")
 client.realtime:create_world(mode, callback)       -- always a fresh instance
 client.realtime:find_or_create_world(mode, callback)
 client.realtime:join_world(world_id, callback)
-client.realtime:send_world_input(input_table)
+client.realtime:send_world_input(input_table, seq)  -- seq optional; see prediction
 client.realtime:leave_world()
 client.realtime:join_chat(channel)
 client.realtime:send_chat_message(channel, content)
@@ -328,6 +328,7 @@ with `invalid_<name>_filter` rather than silently ignored.
 | `match_finished`     | game-shaped result                               |
 | `world_joined`       | `{world_id, ...}`                                |
 | `world_tick`         | `{tick, updates}` (entity diffs — auto-merged)   |
+| `world_ack`          | `{tick, seq}` - per-zone high-water mark of consumed `world.input` seq |
 | `entity_added`       | `(id, state)` after merge                        |
 | `entity_updated`     | `(id, state, changed_fields)` after merge        |
 | `entity_removed`     | `(id)` after merge                               |
@@ -377,6 +378,198 @@ end)
 
 `on(event, fn)` registers a callback and **appends** it: bind the same event
 twice and both callbacks fire, in registration order. There is no `off`.
+
+#### Client-side prediction
+
+Stamp a world input with your own counter and the server tells you how far it has
+got, so you can move locally on the same frame and correct when the server
+disagrees.
+
+```lua
+client.realtime:send_world_input({move_x = 1, move_y = 0}, 412)
+```
+
+`seq` is optional and opt-in. It rides the wire as a top-level sibling of
+`payload`, never nested inside the input table:
+
+```json
+{"type":"world.input","seq":412,"payload":{"move_x":1,"move_y":0}}
+```
+
+Leave it out and the key is omitted entirely. The SDK does not generate it: the
+counter is yours to own and to keep increasing.
+
+Send at least one and the server starts replying:
+
+```lua
+client.realtime:on("world_ack", function(payload)
+    -- payload.tick, payload.seq
+end)
+```
+
+`payload.seq` is the highest input `seq` the server had consumed for you as of
+`payload.tick`. It is a high-water mark, not a per-input receipt: several inputs
+collapse into one ack, and an input your world script rejects still advances it,
+so a dropped input never strands the client. The ack is addressed to you alone,
+a separate frame beside the shared `world.tick` broadcast and never part of it,
+and it repeats on every broadcast tick you stay subscribed for, including ticks
+where you sent nothing new. Never send a `seq` and you get silence, with no
+error.
+
+**The mark is per zone, not per connection, and what you receive can go
+backwards.** A player is subscribed to a ring of zones around their own (3x3 at
+the default `view_radius` of 1, fewer at a grid edge), and each of those zones
+keeps its own mark and emits its own ack. Crossing into a neighbour does not
+unsubscribe you from the zone you left, so once you have crossed a boundary you
+get more than one `world.ack` per broadcast tick: one from every subscribed zone
+that has recorded a seq for you. The zone you are in advances its mark; the one
+you left keeps repeating the frozen mark it recorded before the crossing.
+Nothing in the frame says which zone sent it.
+
+So keep a running maximum and ignore any ack whose `seq` does not beat it. "Drop
+everything up to `ack.seq` and replay the rest" is safe only against a monotonic
+mark; run it on the raw stream and a single stale ack re-applies inputs you have
+already consumed. Your own counter never goes backwards. What you receive does.
+Tracked as
+[widgrensit/asobi#477](https://github.com/widgrensit/asobi/issues/477), where the
+server still calls this a per-connection ack.
+
+Acks land only on broadcast ticks, one every `broadcast_interval` simulation
+ticks (default 3). That gate is applied per zone, so a broadcast tick delivers
+one ack per subscribed zone holding a mark for you, not one per connection. The
+zones are not on separate clocks: a world runs a single ticker, and every zone
+gates the same shared tick number on the same world-level interval, so those
+several acks arrive together on one broadcast tick rather than trickling in at
+different cadences. Set the mode's `broadcast_interval` to 1 for an ack every
+tick, see [world server](https://asobi.dev/docs/world-server).
+
+When a broadcast tick produced entity changes, the zone sends `world.tick` first
+and `world.ack` second. When nothing changed the ack arrives alone, with no
+`world.tick` in front of it, so an ack is never a promise that a tick preceded
+it. That ordering holds within one zone; frames from different zones land in the
+same batch, in no fixed order among themselves. Prune and replay in the
+`world_ack` handler: doing either from the `world_tick` or `tick` callback misses
+every tick-free ack, and replays against a buffer nothing has pruned yet.
+
+Keep `seq` a plain counter starting at 1. A `seq` outside the integers
+`0 .. 2^53-1` is ignored, but the input is not: it is still queued and applied
+to the world exactly as normal, and only its acknowledgement is skipped. If a
+valid seq was already recorded for you, acks keep arriving every broadcast tick
+carrying that older mark, they just stop advancing. Nothing raises an error
+either way.
+
+This SDK's JSON encoder switches to exponent form (`1e+15`) at 1e15 on a runtime
+with no integer type, which LÖVE's LuaJIT is, and the server reads `1e+15` as a
+float rather than an integer, so it falls outside that range. Never seed the
+counter from a timestamp. `payload.tick` and `payload.seq` arrive as plain Lua
+numbers and compare exactly, so no cast is needed.
+
+Needs an asobi server on v0.84.0 or later, and asobi-love2d v0.4.0 or later.
+Older versions of either send no acks and raise no error: `on("world_ack")`
+binds, and never fires.
+
+**Reconciliation.** Increment the counter per input, buffer the input under that
+`seq`, apply it to your local copy immediately, and on `world_ack` drop
+everything the server has consumed and re-apply what is left on top of the
+authoritative state.
+
+That authoritative state is the SDK's merged entity store, not the `world_tick`
+payload. `world.tick` carries entity diffs (`op = "a"` add, `"u"` changed fields
+only, `"r"` removal). A full `op = "a"` snapshot arrives on every new
+subscription to a zone, where new means you are not already one of that zone's
+subscribers. Not only the first time: a zone falling out of your ring
+unsubscribes you from it, so walking back until it returns subscribes you afresh
+and replays the whole snapshot, and a player oscillating across a boundary
+re-snapshots on every pass. Joining subscribes you to the whole ring at once, so
+`world_joined` is followed by one snapshot per loaded, non-empty zone in it,
+usually several frames rather than one.
+
+A crossing delivers fresh snapshots too. Moving recomputes the ring, every
+loaded zone in the band that has just entered it is subscribed, and each of
+those holding entities replays a full snapshot: at the default `view_radius` of
+1 an orthogonal step swaps three zones out for three in, so expect a burst of
+snapshot frames on every boundary you cross. The destination zone is the one
+exception, and only because at radius 1 it was already a neighbour in the old
+ring, so re-affirming that held subscription sends nothing. Do not read that
+single no-op as the crossing being quiet.
+
+A zone that drops out of your ring sends `op = "r"` for each of its entities.
+Subscribing to a zone that holds no entities skips the entity snapshot, but the
+terrain push after it is a separate, unconditional step, so in a world with a
+terrain provider that zone still delivers its chunk as `world_terrain`. The
+ticks in between carry deltas.
+
+The SDK merges all of it for you and then fires `entity_added` /
+`entity_updated` / `entity_removed`, so seed your copy from `entity_added`
+**and** `entity_updated`: your own entity's first diff is an add, so an
+`entity_updated`-only handler stays empty and the early acks silently do
+nothing. Copy the fields you reconcile out of `state`, never keep the table
+itself. Both callbacks hand you the SDK's stored table for that entity: a `"u"`
+diff merges into it in place, so a reference you kept changes under you, and an
+`"a"` snapshot replaces the stored entry with a fresh table, so a reference you
+kept silently stops updating instead.
+
+```lua
+local SPEED = 200
+
+local seq = 0
+local acked = -1                   -- running max; acks from other zones lag
+local pending = {}                 -- unacked inputs, oldest first
+local predicted = {x = 0, y = 0}   -- what you draw
+local confirmed = nil              -- last server-confirmed position
+
+local function apply(pos, input, dt)
+    pos.x = pos.x + input.move_x * SPEED * dt
+    pos.y = pos.y + input.move_y * SPEED * dt
+end
+
+-- Your entity's id is whatever your world script gives it, commonly your own
+-- player id.
+local function mine(id) return id == client.player_id end
+
+client.realtime:on("entity_added", function(id, state)
+    if mine(id) then confirmed = {x = state.x, y = state.y} end
+end)
+
+client.realtime:on("entity_updated", function(id, state)
+    if mine(id) then confirmed = {x = state.x, y = state.y} end
+end)
+
+client.realtime:on("world_ack", function(payload)
+    if payload.seq <= acked then return end
+    acked = payload.seq
+    while pending[1] and pending[1].seq <= acked do
+        table.remove(pending, 1)
+    end
+    if not confirmed then return end
+    predicted.x, predicted.y = confirmed.x, confirmed.y
+    for i = 1, #pending do
+        apply(predicted, pending[i].input, pending[i].dt)
+    end
+end)
+
+function love.update(dt)
+    client.realtime:update()
+
+    local input = {
+        move_x = (love.keyboard.isDown("d") and 1 or 0) - (love.keyboard.isDown("a") and 1 or 0),
+        move_y = (love.keyboard.isDown("s") and 1 or 0) - (love.keyboard.isDown("w") and 1 or 0),
+    }
+
+    seq = seq + 1
+    pending[#pending + 1] = {seq = seq, input = input, dt = dt}
+    apply(predicted, input, dt)
+    client.realtime:send_world_input(input, seq)
+end
+```
+
+`pending` stays in send order, which is `seq` order, so pruning from the front is
+enough, and `acked` makes the handler safe to run on every ack whatever zone it
+came from. Cap `pending` - drop the oldest, or stop predicting - if it grows
+without bound: that means acks have stopped arriving.
+
+Wire-level detail is in the
+[WebSocket protocol reference](https://asobi.dev/docs/protocols/websocket#client-side-prediction).
 
 ## Smoke test
 
