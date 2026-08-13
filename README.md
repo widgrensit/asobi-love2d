@@ -304,7 +304,7 @@ client.realtime:list_worlds({mode = "demo"})       -- reply on("world_list")
 client.realtime:create_world(mode, callback)       -- always a fresh instance
 client.realtime:find_or_create_world(mode, callback)
 client.realtime:join_world(world_id, callback)
-client.realtime:send_world_input(input_table)
+client.realtime:send_world_input(input_table, seq)  -- seq optional; see prediction
 client.realtime:leave_world()
 client.realtime:join_chat(channel)
 client.realtime:send_chat_message(channel, content)
@@ -328,6 +328,7 @@ with `invalid_<name>_filter` rather than silently ignored.
 | `match_finished`     | game-shaped result                               |
 | `world_joined`       | `{world_id, ...}`                                |
 | `world_tick`         | `{tick, updates}` (entity diffs — auto-merged)   |
+| `world_ack`          | `{tick, seq}` - highest `world.input` seq consumed as of `tick` |
 | `entity_added`       | `(id, state)` after merge                        |
 | `entity_updated`     | `(id, state, changed_fields)` after merge        |
 | `entity_removed`     | `(id)` after merge                               |
@@ -377,6 +378,135 @@ end)
 
 `on(event, fn)` registers a callback and **appends** it: bind the same event
 twice and both callbacks fire, in registration order. There is no `off`.
+
+#### Client-side prediction
+
+Stamp a world input with your own counter and the server tells you how far it has
+got, so you can move locally on the same frame and correct when the server
+disagrees.
+
+```lua
+client.realtime:send_world_input({move_x = 1, move_y = 0}, 412)
+```
+
+`seq` is optional and opt-in. It rides the wire as a top-level sibling of
+`payload`, never nested inside the input table:
+
+```json
+{"type":"world.input","seq":412,"payload":{"move_x":1,"move_y":0}}
+```
+
+Leave it out and the key is omitted entirely. The SDK does not generate it: the
+counter is yours to own and to keep increasing.
+
+Send at least one and the server starts replying:
+
+```lua
+client.realtime:on("world_ack", function(payload)
+    -- payload.tick, payload.seq
+end)
+```
+
+`payload.seq` is the highest input `seq` the server had consumed for you as of
+`payload.tick`. It is a high-water mark, not a per-input receipt: several inputs
+collapse into one ack, and an input your world script rejects still advances it,
+so a dropped input never strands the client. The ack is per-connection - a
+separate frame beside the shared `world.tick` broadcast, never part of it - and
+it repeats on every broadcast tick you stay subscribed for, including ticks where
+you sent nothing new. Never send a `seq` and you get silence, with no error.
+
+Acks land only on broadcast ticks, one every `broadcast_interval` simulation
+ticks (default 3). Set the mode's `broadcast_interval` to 1 for an ack every tick
+- see [world server](https://asobi.dev/docs/world-server).
+
+For a given tick the server sends `world.tick` first and `world.ack` second, on
+the same connection. Prune on the ack and replay after pruning; replaying from
+the `world_tick` or `tick` callback replays against a buffer nothing has pruned
+yet.
+
+Keep `seq` a plain counter starting at 1. The server ignores any `seq` that is
+not an integer in `0 .. 2^53-1` - no ack, no error - and this SDK's JSON encoder
+switches to exponent form (`1e+15`) at 1e15 on a runtime with no integer type,
+which LÖVE's LuaJIT is. Never seed it from a timestamp. `payload.tick` and
+`payload.seq` arrive as plain Lua numbers and compare exactly, so no cast is
+needed.
+
+Needs an asobi server on v0.84.0 or later, and asobi-love2d v0.4.0 or later.
+Older versions of either send no acks and raise no error: `on("world_ack")`
+binds, and never fires.
+
+**Reconciliation.** Increment the counter per input, buffer the input under that
+`seq`, apply it to your local copy immediately, and on `world_ack` drop
+everything the server has consumed and re-apply what is left on top of the
+authoritative state.
+
+That authoritative state is the SDK's merged entity store, not the `world_tick`
+payload. `world.tick` carries entity diffs (`op = "a"` add, `"u"` changed fields
+only, `"r"` removal); only the first one after `world_joined` is a full snapshot.
+The SDK merges them for you and then fires `entity_added` / `entity_updated` /
+`entity_removed`, so seed your copy from `entity_added` **and** `entity_updated`
+- your own entity's first diff is an add, so an `entity_updated`-only handler
+stays empty and the early acks silently do nothing. Copy the fields you
+reconcile: `entity_updated` hands you the SDK's live table for that entity, which
+it mutates in place on the next tick.
+
+```lua
+local SPEED = 200
+
+local seq = 0
+local pending = {}                 -- unacked inputs, oldest first
+local predicted = {x = 0, y = 0}   -- what you draw
+local confirmed = nil              -- last server-confirmed position
+
+local function apply(pos, input, dt)
+    pos.x = pos.x + input.move_x * SPEED * dt
+    pos.y = pos.y + input.move_y * SPEED * dt
+end
+
+-- Your entity's id is whatever your world script gives it, commonly your own
+-- player id.
+local function mine(id) return id == client.player_id end
+
+client.realtime:on("entity_added", function(id, state)
+    if mine(id) then confirmed = {x = state.x, y = state.y} end
+end)
+
+client.realtime:on("entity_updated", function(id, state)
+    if mine(id) then confirmed = {x = state.x, y = state.y} end
+end)
+
+client.realtime:on("world_ack", function(payload)
+    while pending[1] and pending[1].seq <= payload.seq do
+        table.remove(pending, 1)
+    end
+    if not confirmed then return end
+    predicted.x, predicted.y = confirmed.x, confirmed.y
+    for i = 1, #pending do
+        apply(predicted, pending[i].input, pending[i].dt)
+    end
+end)
+
+function love.update(dt)
+    client.realtime:update()
+
+    local input = {
+        move_x = (love.keyboard.isDown("d") and 1 or 0) - (love.keyboard.isDown("a") and 1 or 0),
+        move_y = (love.keyboard.isDown("s") and 1 or 0) - (love.keyboard.isDown("w") and 1 or 0),
+    }
+
+    seq = seq + 1
+    pending[#pending + 1] = {seq = seq, input = input, dt = dt}
+    apply(predicted, input, dt)
+    client.realtime:send_world_input(input, seq)
+end
+```
+
+`pending` stays in send order, which is `seq` order, so pruning from the front is
+enough. Cap it - drop the oldest, or stop predicting - if it grows without bound:
+that means acks have stopped arriving.
+
+Wire-level detail is in the
+[WebSocket protocol reference](https://asobi.dev/docs/protocols/websocket#client-side-prediction).
 
 ## Smoke test
 
