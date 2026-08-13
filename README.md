@@ -436,17 +436,20 @@ server still calls this a per-connection ack.
 
 Acks land only on broadcast ticks, one every `broadcast_interval` simulation
 ticks (default 3). That gate is applied per zone, so a broadcast tick delivers
-one ack per subscribed zone holding a mark for you, not one per connection. Set
-the mode's `broadcast_interval` to 1 for an ack every tick, see
-[world server](https://asobi.dev/docs/world-server).
+one ack per subscribed zone holding a mark for you, not one per connection. The
+zones are not on separate clocks: a world runs a single ticker, and every zone
+gates the same shared tick number on the same world-level interval, so those
+several acks arrive together on one broadcast tick rather than trickling in at
+different cadences. Set the mode's `broadcast_interval` to 1 for an ack every
+tick, see [world server](https://asobi.dev/docs/world-server).
 
 When a broadcast tick produced entity changes, the zone sends `world.tick` first
 and `world.ack` second. When nothing changed the ack arrives alone, with no
 `world.tick` in front of it, so an ack is never a promise that a tick preceded
-it. That ordering holds within one zone; frames from different zones interleave
-in no fixed order. Prune and replay in the `world_ack` handler: doing either from
-the `world_tick` or `tick` callback misses every tick-free ack, and replays
-against a buffer nothing has pruned yet.
+it. That ordering holds within one zone; frames from different zones land in the
+same batch, in no fixed order among themselves. Prune and replay in the
+`world_ack` handler: doing either from the `world_tick` or `tick` callback misses
+every tick-free ack, and replays against a buffer nothing has pruned yet.
 
 Keep `seq` a plain counter starting at 1. A `seq` outside the integers
 `0 .. 2^53-1` is ignored, but the input is not: it is still queued and applied
@@ -472,15 +475,29 @@ authoritative state.
 
 That authoritative state is the SDK's merged entity store, not the `world_tick`
 payload. `world.tick` carries entity diffs (`op = "a"` add, `"u"` changed fields
-only, `"r"` removal). A full `op = "a"` snapshot arrives whenever a zone enters
-your ring for the first time. Joining subscribes you to the whole ring at once,
-so `world_joined` is followed by one snapshot per loaded, non-empty zone in it,
-usually several frames rather than one. A one-step crossing usually delivers
-nothing new: at the default `view_radius` of 1 the destination zone was already
-in your ring, and re-affirming a subscription you already hold sends nothing.
-A zone that leaves your ring sends `op = "r"` for each of its entities, and
-subscribing to a zone that holds no entities sends nothing at all. The ticks in
-between carry deltas.
+only, `"r"` removal). A full `op = "a"` snapshot arrives on every new
+subscription to a zone, where new means you are not already one of that zone's
+subscribers. Not only the first time: a zone falling out of your ring
+unsubscribes you from it, so walking back until it returns subscribes you afresh
+and replays the whole snapshot, and a player oscillating across a boundary
+re-snapshots on every pass. Joining subscribes you to the whole ring at once, so
+`world_joined` is followed by one snapshot per loaded, non-empty zone in it,
+usually several frames rather than one.
+
+A crossing delivers fresh snapshots too. Moving recomputes the ring, every
+loaded zone in the band that has just entered it is subscribed, and each of
+those holding entities replays a full snapshot: at the default `view_radius` of
+1 an orthogonal step swaps three zones out for three in, so expect a burst of
+snapshot frames on every boundary you cross. The destination zone is the one exception, and only
+because at radius 1 it was already a neighbour in the old ring, so re-affirming
+that held subscription sends nothing. Do not read that single no-op as the
+crossing being quiet.
+
+A zone that drops out of your ring sends `op = "r"` for each of its entities.
+Subscribing to a zone that holds no entities skips the entity snapshot, but the
+terrain push after it is a separate, unconditional step, so in a world with a
+terrain provider that zone still delivers its chunk as `world_terrain`. The
+ticks in between carry deltas.
 
 The SDK merges all of it for you and then fires `entity_added` /
 `entity_updated` / `entity_removed`, so seed your copy from `entity_added`
