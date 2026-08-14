@@ -295,6 +295,7 @@ client.realtime:on(event, fn)                      -- bind a callback
 client.realtime:add_to_matchmaker({mode = "demo"})
 client.realtime:remove_from_matchmaker(ticket_id)
 client.realtime:send_match_input(input_table)
+client.realtime:find_or_create_match(mode)         -- reply on("match_joined")
 client.realtime:join_match(match_id)
 client.realtime:leave_match()
 client.realtime:list_matches({mode = "demo"})      -- reply on("match_list")
@@ -316,6 +317,38 @@ client.realtime:update_presence("online")
 Listing filters are validated server-side: `mode` (string), `has_capacity`
 (boolean) and, for matches only, `joinable` (boolean). A wrong type is rejected
 with `invalid_<name>_filter` rather than silently ignored.
+
+#### Dropping into a live match
+
+`find_or_create_match(mode)` joins a joinable match of that mode and spawns one
+when there is none. Prefer it to `list_matches` followed by `join_match` on what
+you saw, which races: two clients reading the same empty listing each create a
+match. The server resolves this one in a single serialized step, so simultaneous
+callers converge on the same match. The reply is `match.joined`, the frame
+`join_match` already answers with, so it lands on `on("match_joined")` and needs
+no new handler.
+
+```lua
+client.realtime:on("match_joined", function(payload)
+    print("in match " .. payload.match_id)
+end)
+
+client.realtime:find_or_create_match("arena")
+```
+
+`mode` is the only key this SDK sends; every match parameter beyond it comes
+from the mode's server-side config. The mode must set `quick_play = true`, which
+defaults to false for match modes, and one that has not opted in is refused with
+`quick_play_disabled`. `quick_play` is not `listed`: that flag is browser
+visibility, a separate axis.
+
+Refusals arrive as `on("error")` with that `payload.reason`. They include
+`not_found` (no mode of that name is configured, so a typo'd or unregistered
+mode lands here first), `match_capacity_reached` (the node-wide match cap),
+`wrong_mode_type` (the mode is a world mode) and `join_rate_limited` (the same
+bucket as `match.join` and `world.join`).
+
+Needs an asobi server on v0.86.0 or later.
 
 #### Events
 
@@ -342,7 +375,7 @@ with `invalid_<name>_filter` rather than silently ignored.
 > ⚠️ Two events look similar but mean different things:
 >
 > - `match_matched` — server-pushed when the matchmaker pairs you. **This is what the smoke listens for.**
-> - `match_joined` — reply to a client-initiated `match.join`.
+> - `match_joined` — reply to a client-initiated `match.join` or `match.find_or_create`.
 
 A Lua game script pushes to clients two ways. `game.send(player_id, message)`
 targets one player and lands on `game_message`. `game.broadcast(event, payload)`

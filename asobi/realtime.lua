@@ -278,6 +278,24 @@ function M:_send_fire_and_forget(mtype, payload, seq)
 	self.ws:send(frame)
 end
 
+-- Join a joinable match of `mode`, spawning one when none is, instead of
+-- reading match.list and then racing another client to the same entry. The
+-- server serializes it, so simultaneous callers converge on one match.
+-- `mode` is the only key this SDK sends; every match parameter beyond it comes
+-- from the mode's server-side config.
+--
+-- The reply is match.joined, the frame join_match already answers with, so it
+-- arrives on on("match_joined") like that one rather than on a callback.
+--
+-- The mode needs quick_play = true, which defaults to false for match modes;
+-- one that has not opted in is refused with quick_play_disabled. Note
+-- quick_play is not `listed`, which is browser visibility and a separate axis.
+-- Refusals include not_found, for a mode name that is not configured at all.
+-- Needs an asobi server on v0.86.0 or later.
+function M:find_or_create_match(mode)
+	self:_send("match.find_or_create", {mode = mode})
+end
+
 function M:join_match(match_id)
 	self:_send("match.join", {match_id = match_id})
 end
