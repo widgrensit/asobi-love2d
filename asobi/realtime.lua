@@ -290,7 +290,7 @@ end
 -- The mode needs quick_play = true, which defaults to false for match modes;
 -- one that has not opted in is refused with quick_play_disabled. Note
 -- quick_play is not `listed`, which is browser visibility and a separate axis.
--- Needs an asobi server on v0.85.0 or later.
+-- Needs an asobi server on v0.86.0 or later.
 function M:find_or_create_match(mode)
 	self:_send("match.find_or_create", {mode = mode})
 end

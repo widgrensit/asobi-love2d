@@ -345,7 +345,7 @@ visibility, a separate axis. The other refusals a caller can see, all as
 node-wide match cap), `wrong_mode_type` (the mode is a world mode) and
 `join_rate_limited` (the same bucket as `match.join` and `world.join`).
 
-Needs an asobi server on v0.85.0 or later.
+Needs an asobi server on v0.86.0 or later.
 
 #### Events
 
