@@ -336,14 +336,17 @@ end)
 client.realtime:find_or_create_match("arena")
 ```
 
-`mode` is the whole payload; every other match parameter comes from the mode's
-server-side config. The mode must set `quick_play = true`, which defaults to
-false for match modes, and one that has not opted in is refused with
+`mode` is the only key this SDK sends; every match parameter beyond it comes
+from the mode's server-side config. The mode must set `quick_play = true`, which
+defaults to false for match modes, and one that has not opted in is refused with
 `quick_play_disabled`. `quick_play` is not `listed`: that flag is browser
-visibility, a separate axis. The other refusals a caller can see, all as
-`on("error")` with that `payload.reason`, are `match_capacity_reached` (the
-node-wide match cap), `wrong_mode_type` (the mode is a world mode) and
-`join_rate_limited` (the same bucket as `match.join` and `world.join`).
+visibility, a separate axis.
+
+Refusals arrive as `on("error")` with that `payload.reason`. They include
+`not_found` (no mode of that name is configured, so a typo'd or unregistered
+mode lands here first), `match_capacity_reached` (the node-wide match cap),
+`wrong_mode_type` (the mode is a world mode) and `join_rate_limited` (the same
+bucket as `match.join` and `world.join`).
 
 Needs an asobi server on v0.86.0 or later.
 
