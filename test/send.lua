@@ -124,6 +124,27 @@ do
 	check(fired ~= nil, "match.list: reply fires on(match_list)")
 end
 
+do
+	local frame = sends("match.find_or_create", realtime.find_or_create_match, "arena")
+	check(frame:find('"mode":"arena"', 1, true) ~= nil, "match.find_or_create: sends mode")
+	local decoded = json.decode(frame)
+	local keys = 0
+	for _ in pairs(decoded.payload) do keys = keys + 1 end
+	check(keys == 1, "match.find_or_create: mode is the whole payload")
+end
+
+-- Its reply is match.joined, the same frame match.join answers with, so it has
+-- to reach on("match_joined") rather than a cid callback.
+do
+	local rt = new_rt()
+	local fired
+	rt:on("match_joined", function(payload) fired = payload end)
+	rt:find_or_create_match("arena")
+	rt:_handle_message('{"type":"match.joined","cid":"1","payload":{"match_id":"m-1"}}')
+	check(fired ~= nil and fired.match_id == "m-1",
+		"match.find_or_create: reply fires on(match_joined)")
+end
+
 -- world.input carries an optional per-input seq for world.ack prediction. It
 -- rides as a top-level sibling of payload, never nested inside it, and stays
 -- numeric.
