@@ -1,4 +1,4 @@
--- `world.ack` is asobi core's client-side-prediction ack (core v0.84.0):
+-- `world.ack` is asobi core's client-side-prediction ack (core v0.84.1):
 --   {"type":"world.ack","payload":{"tick":42,"seq":7}}
 -- The server echoes the highest world.input `seq` it has consumed for you as
 -- of `tick`. It fires on("world_ack"). An explicit dispatch case reclaims it
