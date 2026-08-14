@@ -439,8 +439,6 @@ counter from a timestamp. `payload.tick` and `payload.seq` arrive as plain Lua
 numbers and compare exactly, so no cast is needed.
 
 Needs an asobi server on v0.84.1 or later, and asobi-love2d v0.4.0 or later.
-Older versions of either send no acks and raise no error: `on("world_ack")`
-binds, and never fires.
 
 **Reconciliation.** Increment the counter per input, buffer the input under that
 `seq`, apply it to your local copy immediately, and on `world_ack` drop
