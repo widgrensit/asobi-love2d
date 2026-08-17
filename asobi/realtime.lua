@@ -4,6 +4,7 @@
 
 local websocket = require("asobi.websocket")
 local json = require("asobi.json")
+local wire = require("asobi.wire")
 
 local M = {}
 M.__index = M
@@ -98,6 +99,15 @@ function M.new(client)
 		-- keeps gapping asks once per incident rather than once per frame.
 		resync_pending = {},
 		local_player_id = nil,
+		-- Set before connect() to ask for the binary world.tick encoding. The
+		-- decoder maps its 2-byte entity slots back to entity ids, so every
+		-- callback already written keeps working unchanged.
+		request_binary_wire = false,
+		-- The wire the server actually GRANTED, "json" or "binary". A server with
+		-- the binary wire switched off answers "json", so read this rather than
+		-- assume the request was honoured.
+		wire = "json",
+		wire_state = wire.new(),
 	}, M)
 end
 
@@ -149,8 +159,9 @@ function M:_handle_message(raw)
 		return
 	end
 
-	if mtype == "session.connected" and payload.player_id then
-		self.local_player_id = payload.player_id
+	if mtype == "session.connected" then
+		if payload.player_id then self.local_player_id = payload.player_id end
+		self.wire = payload.wire or "json"
 	end
 
 	if mtype == "world.tick" or mtype == "match.state" then
@@ -316,17 +327,39 @@ end
 function M:connect()
 	local ws = self.ws
 	ws.on_message = function(msg) self:_handle_message(msg) end
+	ws.on_binary = function(msg) self:_handle_binary(msg) end
 	ws.on_close = function() fire(self, "disconnected", "closed") end
 	ws.on_error = function(e) fire(self, "error_raw", e) end
 
 	local ok, err = ws:connect(self.client.ws_url)
 	if not ok then return false, err end
-	self:_send("session.connect", {token = self.client.session_token})
+	local connect_payload = {token = self.client.session_token}
+	if self.request_binary_wire then connect_payload.wire = "binary" end
+	self:_send("session.connect", connect_payload)
 	return true
+end
+
+-- The binary `world.tick` wire (asobi ADR 0013). Decoded into the same payload
+-- table the JSON path produces, so it goes through the same zone reconciliation,
+-- the same gap detection and the same callbacks - a game never learns which wire
+-- carried a frame.
+function M:_handle_binary(raw)
+	local payload = wire.decode(self.wire_state, raw)
+	if not payload then
+		-- Off the network and unreadable. Dropping one frame costs a gap that
+		-- frame_seq detects and a resync repairs; guessing at it would corrupt the
+		-- entity table with no way to notice.
+		return
+	end
+	self:_dispatch_tick(payload)
 end
 
 function M:disconnect()
 	self.ws:close()
+	-- Slot bindings are established by the adds THIS connection received, so
+	-- carrying them across a reconnect would attach stale ids to slots the server
+	-- has since handed to different entities.
+	wire.reset(self.wire_state)
 end
 
 function M:update()
