@@ -156,6 +156,7 @@ function M.new()
 		buf = "",
 		on_open = nil,
 		on_message = nil,
+		on_binary = nil,
 		on_close = nil,
 		on_error = nil,
 	}, M)
@@ -261,6 +262,12 @@ function M:update()
 		self.buf = self.buf:sub(consumed + 1)
 		if opcode == 0x1 then
 			if self.on_message then self.on_message(payload) end
+		elseif opcode == 0x2 then
+			-- A binary frame is the binary world.tick encoding. This used to fall
+			-- off the end of the chain and vanish without a word, so a game that
+			-- negotiated the binary wire simply stopped receiving ticks with
+			-- nothing to point at.
+			if self.on_binary then self.on_binary(payload) end
 		elseif opcode == 0x8 then
 			self.state = "closed"
 			if self.sock then self.sock:close() end
