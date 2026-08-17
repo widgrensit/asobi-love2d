@@ -76,6 +76,27 @@ function M.new(client)
 		pending = {},
 		callbacks = {},
 		entities = {},
+		-- id -> zone key of the zone the client currently believes owns this
+		-- entity, which is what makes the flat `entities` table safe across an
+		-- interest ring. A player is subscribed to SEVERAL zones at once, each an
+		-- independent server process, and frames from two of them have no order
+		-- relative to each other. A crossing emits op:"r" from the zone being
+		-- left and op:"a" from the zone being entered, so applying both into one
+		-- namespace is last-writer-wins - and when the remove lands last the
+		-- entity is gone for the life of the world, because the server will not
+		-- re-add something already in its own baseline.
+		--
+		-- With ownership recorded, a remove or update from a zone that no longer
+		-- owns the id is ignored, so both arrival orders converge. `entities`
+		-- stays flat and stays the public view.
+		entity_zone = {},
+		-- zone key -> highest frame_seq applied. Gap detection only: it cannot
+		-- see the crossing above, since each zone's own sequence stays
+		-- contiguous through it.
+		zone_seq = {},
+		-- zone key -> true while a world.resync is outstanding, so a client that
+		-- keeps gapping asks once per incident rather than once per frame.
+		resync_pending = {},
 		local_player_id = nil,
 	}, M)
 end
@@ -159,16 +180,38 @@ function M:_handle_message(raw)
 	if name then fire(self, "world_event", name, payload) end
 end
 
-function M:_apply_entity_update(u)
+-- A stable key for the zone a tick frame came from. match.state carries no
+-- coords, and nor does a server predating asobi v0.89.0; both collapse onto one
+-- key so match mode keeps exactly its previous single-namespace behaviour.
+local MATCH_ZONE = "@match"
+
+local function zone_key(payload)
+	local z = payload and payload.zone
+	if type(z) == "table" and z[1] ~= nil and z[2] ~= nil then
+		return tostring(z[1]) .. ":" .. tostring(z[2])
+	end
+	return MATCH_ZONE
+end
+
+function M:_apply_entity_update(u, zkey)
 	local id = u.id
 	if not id then return nil end
 	local op = u.op
+	-- A remove or update from a zone that no longer owns this id is stale: the
+	-- entity has crossed and another zone has claimed it, so honouring the old
+	-- zone's word would undo the crossing. Adds always win and re-claim, which
+	-- is what makes both arrival orders converge on the same state.
+	local owner = self.entity_zone[id]
+	if op ~= "a" and owner ~= nil and owner ~= zkey then
+		return nil
+	end
 	if op == "a" then
 		local state = {}
 		for k, v in pairs(u) do
 			if k ~= "op" and k ~= "id" then state[k] = v end
 		end
 		self.entities[id] = state
+		self.entity_zone[id] = zkey
 		return {kind = "added", id = id, state = state}
 	elseif op == "u" then
 		local existing = self.entities[id]
@@ -176,6 +219,7 @@ function M:_apply_entity_update(u)
 			existing = {}
 			self.entities[id] = existing
 		end
+		self.entity_zone[id] = zkey
 		local changed = {}
 		for k, v in pairs(u) do
 			if k ~= "op" and k ~= "id" then
@@ -189,6 +233,7 @@ function M:_apply_entity_update(u)
 		return {kind = "updated", id = id, state = existing, changed = changed}
 	elseif op == "r" then
 		self.entities[id] = nil
+		self.entity_zone[id] = nil
 		return {kind = "removed", id = id}
 	end
 	return nil
@@ -196,8 +241,35 @@ end
 
 function M:_dispatch_tick(payload)
 	local updates = payload and payload.updates or {}
+	local zkey = zone_key(payload)
+	local seq, is_kf = payload and payload.frame_seq, payload and payload.kf
+
+	if is_kf then
+		-- A keyframe is the whole of this zone's state, adopted unconditionally
+		-- and resetting the sequence. Unconditional matters: a zone restart
+		-- resets frame_seq while the zone's identity is unchanged, so a monotonic
+		-- guard would reject the one frame that repairs it.
+		self.zone_seq[zkey] = seq
+		self.resync_pending[zkey] = nil
+		self:_reconcile_keyframe(zkey, updates)
+	elseif type(seq) == "number" then
+		local expected = self.zone_seq[zkey]
+		if expected ~= nil and seq <= expected then
+			-- Already applied, or behind something newer. Re-applying rewinds
+			-- the zone.
+			return
+		end
+		if expected ~= nil and seq > expected + 1 then
+			-- A gap. This frame's ops are still the newest information we have,
+			-- so they are applied rather than dropped; the keyframe the resync
+			-- brings back corrects whatever the gap cost.
+			self:_request_resync(zkey, payload.zone)
+		end
+		self.zone_seq[zkey] = seq
+	end
+
 	for i = 1, #updates do
-		local change = self:_apply_entity_update(updates[i])
+		local change = self:_apply_entity_update(updates[i], zkey)
 		if change then
 			if change.kind == "added" then
 				fire(self, "entity_added", change.id, change.state)
@@ -209,6 +281,36 @@ function M:_dispatch_tick(payload)
 		end
 	end
 	fire(self, "tick", payload.tick, payload)
+end
+
+-- A keyframe lists every entity its zone holds, so anything the client still
+-- attributes to that zone and the frame omits was removed while the client was
+-- not listening. Other zones' entities are none of this frame's business.
+function M:_reconcile_keyframe(zkey, updates)
+	local present = {}
+	for i = 1, #updates do
+		local id = updates[i] and updates[i].id
+		if id then present[id] = true end
+	end
+	local stale = {}
+	for id, owner in pairs(self.entity_zone) do
+		if owner == zkey and not present[id] then stale[#stale + 1] = id end
+	end
+	for i = 1, #stale do
+		local id = stale[i]
+		self.entities[id] = nil
+		self.entity_zone[id] = nil
+		fire(self, "entity_removed", id)
+	end
+end
+
+-- Asks the server for a fresh keyframe for ONE zone. Once per gap incident, not
+-- once per frame: the flag clears when the keyframe lands. A frame with no
+-- coords (match mode, or a server predating the field) has nothing to ask for.
+function M:_request_resync(zkey, zone)
+	if zone == nil or self.resync_pending[zkey] then return end
+	self.resync_pending[zkey] = true
+	self:_send_fire_and_forget("world.resync", {zone = {zone[1], zone[2]}})
 end
 
 function M:connect()
