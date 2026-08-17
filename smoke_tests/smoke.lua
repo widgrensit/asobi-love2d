@@ -43,9 +43,18 @@ do
 	local probe = require("asobi").new({host = host, port = port})
 	local ok = false
 	for i = 1, 60 do
-		local _, err = require("asobi.http").post(probe, "/api/v1/auth/register", {})
+		-- GET, not POST, and that is the whole point. POST /auth/register is rate
+		-- limited to 3 per second per IP (asobi_sup's `register` bucket, which
+		-- guards a KDF), so probing with a POST spends budget the two real
+		-- registrations below immediately need: probe + player A + player B is
+		-- exactly 3, and any retry denies the second player with
+		-- "Too many requests". A GET on a POST-only route answers 404/405 without
+		-- reaching the limiter, and any HTTP answer at all proves the app is up,
+		-- which is all a readiness probe needs to know. Matches asobi-dart's
+		-- probe, which has never had this failure.
+		local _, err = require("asobi.http").get(probe, "/api/v1/auth/register")
 		-- Any response that's not a connection failure means the server is up.
-		-- Even a 400 from a malformed request body proves we reached the app.
+		-- Even a 404 for the wrong method proves we reached the app.
 		if not err or (err.status_code and err.status_code >= 100) then
 			ok = true; log("Backend reachable after " .. i .. "s"); break
 		end
