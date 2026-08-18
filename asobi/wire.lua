@@ -1,10 +1,10 @@
 -- Decoder for asobi's binary `world.tick` frame.
 --
--- Same information as the JSON frame in roughly a fifth of the bytes, and the
+-- Same information as the JSON frame in about a quarter of the bytes, and the
 -- decode is the part that matters here: stock Lua has no native JSON, so this
 -- SDK ships a pure-Lua parser, and a 40-entity delta costs it around 440 us per
 -- frame. At 20 Hz that is close to 1% of a mobile CPU doing nothing but reading
--- text. The same frame through this decoder is a byte loop over about a fifth of
+-- text. The same frame through this decoder is a byte loop over about a quarter of
 -- the bytes.
 --
 -- Arithmetic only: no `string.unpack`, no `bit32`, no bitwise operators. LOVE 11
