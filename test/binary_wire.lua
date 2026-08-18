@@ -91,6 +91,10 @@ for i = 1, #manifest do
 					if want.id then
 						check(have.id == want.id, name .. "[" .. r .. "]: id")
 					end
+					-- The generation. A decoder that skipped the byte shifts every
+					-- later offset and fails loudly; one that read it from the wrong
+					-- place would not, so pin the value.
+					check(have.gen == want.gen, name .. "[" .. r .. "]: gen")
 					for k, v in pairs(want.fields or {}) do
 						-- A null field is absent rather than present-and-nil, since
 						-- Lua tables cannot hold a nil - same as the JSON path,

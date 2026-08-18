@@ -23,7 +23,7 @@
 --   frame    Kind:8, ZX:32, ZY:32, FrameSeq:64, Kf:8, Tick:64,
 --            DictLen:8, Dict, RecCount:16, Records
 --   dict     for each name: Len:8, Name          (at most 32 names)
---   record   Op:8, Slot:16, [IdLen:8, Id]?, FieldCount:8, Fields
+--   record   Op:8, Slot:16, Gen:8, [IdLen:8, Id]?, FieldCount:8, Fields
 --   field    Type:3, Idx:5, Value                (one header byte)
 
 local M = {}
@@ -161,10 +161,14 @@ function M.decode(state, raw)
 
 	local updates = {}
 	for r = 1, rec_count do
-		if pos + 2 > len then return nil end
-		local op_byte, slot
+		if pos + 3 > len then return nil end
+		local op_byte, slot, gen
 		op_byte, pos = read_u8(raw, pos)
 		slot, pos = read_u16(raw, pos)
+		-- The slot's generation, advancing every time it is rebound to a different
+		-- entity. Redundant on this ordered, reliable wire and carried anyway, so a
+		-- client also running the datagram plane keeps ONE slot table for both.
+		gen, pos = read_u8(raw, pos)
 		local op = OPS[op_byte]
 		if not op then return nil end
 
@@ -188,7 +192,7 @@ function M.decode(state, raw)
 		-- so a decoded record is byte-for-byte the shape the JSON wire sends.
 		-- Every SDK reconciler already reads that shape, which is what makes the
 		-- binary wire invisible downstream.
-		local record = {op = op, id = id}
+		local record = {op = op, id = id, gen = gen}
 
 		if pos > len then return nil end
 		local field_count
