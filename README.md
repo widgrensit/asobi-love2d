@@ -601,6 +601,31 @@ field holding a table.
 Arithmetic only, no `string.unpack` and no bitwise operators, so it runs on
 LOVE 11's LuaJIT as well as on a 5.4 build.
 
+## The datagram plane (optional)
+
+Positions can travel over UDP instead of the WebSocket, so one lost packet costs
+one frame of staleness rather than stalling everything behind a retransmit.
+
+```lua
+client.realtime.request_datagram = true
+client.realtime:connect()
+```
+
+**Nothing else changes.** Entity callbacks fire exactly as before; the SDK merges
+the two carriers for you, and `world.tick` keeps carrying entity creation,
+removal and every non-transform field. Only absolute transform state travels on
+the plane, and only what your server declared in its `dgram_pose` manifest.
+
+**The WebSocket carries everything in every state.** If the server has no
+gateway, if a firewall drops UDP, or if the path goes quiet for two seconds, the
+SDK falls back to taking transforms from `world.tick` and keeps trying in the
+background. There is no state in which your game stops working, which is why this
+is safe to switch on and why a web export - where raw UDP does not exist - simply
+never opens it.
+
+What it needs from the server: `binary_wire` on, a `dgram_pose` manifest, and a
+gateway reachable at the endpoint the mint hands back.
+
 ## Smoke test
 
 `smoke_tests/smoke.lua` is the canonical [SMOKE.md](https://github.com/widgrensit/sdk_demo_backend/blob/main/SMOKE.md) flow against `sdk_demo_backend`. It runs as a standalone Lua script — does **not** require `love` — so CI can validate the SDK end-to-end without installing LÖVE:

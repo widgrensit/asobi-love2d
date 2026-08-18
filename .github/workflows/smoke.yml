@@ -80,6 +80,9 @@ jobs:
       - name: Binary wire test (asobi's own fixture corpus -> decoded payloads)
         run: lua5.4 test/binary_wire.lua
 
+      - name: Datagram test (client state machine + codec)
+        run: lua5.4 test/datagram.lua
+
       - name: Multi-handler test (multiple handlers per event, in order)
         run: lua5.4 test/multi_handler.lua
 
