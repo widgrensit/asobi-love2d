@@ -625,6 +625,10 @@ never opens it.
 
 What it needs from the server: `binary_wire` on, a `dgram_pose` manifest, and a
 gateway reachable at the endpoint the mint hands back.
+The whole story - what it carries, why losing packets is fine, the server
+compose file and what happens when it does not work - is in
+[the datagram plane guide](https://github.com/widgrensit/asobi/blob/main/guides/datagram-plane.md).
+
 
 ## Smoke test
 
