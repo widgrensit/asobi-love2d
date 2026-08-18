@@ -572,6 +572,60 @@ without bound: that means acks have stopped arriving.
 Wire-level detail is in the
 [WebSocket protocol reference](https://asobi.dev/docs/protocols/websocket#client-side-prediction).
 
+## Binary `world.tick`
+
+Ask for the binary encoding and `world.tick` arrives as a WebSocket binary frame
+in roughly a fifth of the bytes. The decode saving is the one that matters here:
+LOVE has no native JSON, so this SDK ships a **pure-Lua parser**, and a 40-entity
+delta costs it around 440 us per frame - at 20 Hz, close to 1% of a mobile CPU
+doing nothing but reading text. The binary decoder was measured **33x faster** on
+the same frame.
+
+```lua
+client.realtime.request_binary_wire = true
+client.realtime:connect()
+```
+
+**Nothing else changes.** The decoder maps the wire's compact 2-byte entity slots
+back to entity ids and produces the same record shape the JSON wire sends, so
+`entity_added` / `entity_updated` / `entity_removed` and `tick` behave exactly as
+before and every callback already written keeps working. Only `world.tick` is
+affected; everything else stays JSON text on both wires.
+
+Requires the server to have `binary_wire` switched on. If it does not, you
+silently stay on text - `client.realtime.wire` reads `"json"` or `"binary"` once
+`connected` has fired, so read it rather than assume. The same fallback happens
+per frame for anything the server cannot encode as binary, such as an entity
+field holding a table.
+
+Arithmetic only, no `string.unpack` and no bitwise operators, so it runs on
+LOVE 11's LuaJIT as well as on a 5.4 build.
+
+## The datagram plane (optional)
+
+Positions can travel over UDP instead of the WebSocket, so one lost packet costs
+one frame of staleness rather than stalling everything behind a retransmit.
+
+```lua
+client.realtime.request_datagram = true
+client.realtime:connect()
+```
+
+**Nothing else changes.** Entity callbacks fire exactly as before; the SDK merges
+the two carriers for you, and `world.tick` keeps carrying entity creation,
+removal and every non-transform field. Only absolute transform state travels on
+the plane, and only what your server declared in its `dgram_pose` manifest.
+
+**The WebSocket carries everything in every state.** If the server has no
+gateway, if a firewall drops UDP, or if the path goes quiet for two seconds, the
+SDK falls back to taking transforms from `world.tick` and keeps trying in the
+background. There is no state in which your game stops working, which is why this
+is safe to switch on and why a web export - where raw UDP does not exist - simply
+never opens it.
+
+What it needs from the server: `binary_wire` on, a `dgram_pose` manifest, and a
+gateway reachable at the endpoint the mint hands back.
+
 ## Smoke test
 
 `smoke_tests/smoke.lua` is the canonical [SMOKE.md](https://github.com/widgrensit/sdk_demo_backend/blob/main/SMOKE.md) flow against `sdk_demo_backend`. It runs as a standalone Lua script — does **not** require `love` — so CI can validate the SDK end-to-end without installing LÖVE:

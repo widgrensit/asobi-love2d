@@ -4,6 +4,8 @@
 
 local websocket = require("asobi.websocket")
 local json = require("asobi.json")
+local wire = require("asobi.wire")
+local datagram = require("asobi.datagram")
 
 local M = {}
 M.__index = M
@@ -98,6 +100,26 @@ function M.new(client)
 		-- keeps gapping asks once per incident rather than once per frame.
 		resync_pending = {},
 		local_player_id = nil,
+		-- Set before connect() to ask for the binary world.tick encoding. The
+		-- decoder maps its 2-byte entity slots back to entity ids, so every
+		-- callback already written keeps working unchanged.
+		request_binary_wire = false,
+		-- The wire the server actually GRANTED, "json" or "binary". A server with
+		-- the binary wire switched off answers "json", so read this rather than
+		-- assume the request was honoured.
+		wire = "json",
+		wire_state = wire.new(),
+		-- Set before connect() to also open the datagram plane. Positions then
+		-- arrive over UDP, which cannot head-of-line-block behind a retransmit.
+		-- Everything else is unchanged, and the WebSocket keeps carrying the
+		-- whole game in every state.
+		request_datagram = false,
+		dgram = nil,
+		dgram_socket = nil,
+		-- Per entity, the last pose tick applied. A world.tick transform field
+		-- is only applied over a pose if it is not older, which is the entire
+		-- two-carrier merge rule in one number (ADR 0012, decision 12).
+		pose_tick = {},
 	}, M)
 end
 
@@ -149,8 +171,10 @@ function M:_handle_message(raw)
 		return
 	end
 
-	if mtype == "session.connected" and payload.player_id then
-		self.local_player_id = payload.player_id
+	if mtype == "session.connected" then
+		if payload.player_id then self.local_player_id = payload.player_id end
+		self.wire = payload.wire or "json"
+		if self.request_datagram then self:_datagram_open() end
 	end
 
 	if mtype == "world.tick" or mtype == "match.state" then
@@ -316,21 +340,189 @@ end
 function M:connect()
 	local ws = self.ws
 	ws.on_message = function(msg) self:_handle_message(msg) end
+	ws.on_binary = function(msg) self:_handle_binary(msg) end
 	ws.on_close = function() fire(self, "disconnected", "closed") end
 	ws.on_error = function(e) fire(self, "error_raw", e) end
 
 	local ok, err = ws:connect(self.client.ws_url)
 	if not ok then return false, err end
-	self:_send("session.connect", {token = self.client.session_token})
+	local connect_payload = {token = self.client.session_token}
+	if self.request_binary_wire then connect_payload.wire = "binary" end
+	self:_send("session.connect", connect_payload)
 	return true
 end
 
+-- The binary `world.tick` wire (asobi ADR 0013). Decoded into the same payload
+-- table the JSON path produces, so it goes through the same zone reconciliation,
+-- the same gap detection and the same callbacks - a game never learns which wire
+-- carried a frame.
+function M:_handle_binary(raw)
+	local payload = wire.decode(self.wire_state, raw)
+	if not payload then
+		-- Off the network and unreadable. Dropping one frame costs a gap that
+		-- frame_seq detects and a resync repairs; guessing at it would corrupt the
+		-- entity table with no way to notice.
+		return
+	end
+	self:_dispatch_tick(payload)
+end
+
 function M:disconnect()
+	self:_datagram_stop()
 	self.ws:close()
+	-- Slot bindings are established by the adds THIS connection received, so
+	-- carrying them across a reconnect would attach stale ids to slots the server
+	-- has since handed to different entities.
+	wire.reset(self.wire_state)
 end
 
 function M:update()
 	self.ws:update()
+	self:_datagram_update()
+end
+
+-- --- The datagram plane ---
+--
+-- Optional in every state. Everything below can fail, be blocked by a firewall,
+-- or never be configured on the server, and the game keeps working on the
+-- WebSocket exactly as it did before - which is what makes this safe to switch
+-- on and why a browser build simply never gets here.
+
+function M:_datagram_open()
+	local ok, socket = pcall(require, "socket")
+	if not ok then return end
+	local hash = self:_sha256()
+	if not hash then return end
+
+	local udp = socket.udp()
+	if not udp then return end
+	udp:settimeout(0)
+
+	self.dgram_socket = udp
+	self.dgram = datagram.new({
+		send = function(bytes)
+			-- A send failure is not an error worth surfacing: there is no
+			-- delivery to fail on a connectionless socket, and the next
+			-- datagram supersedes this one.
+			pcall(function() udp:send(bytes) end)
+		end,
+		now = function() return os.clock() end,
+		sha256 = hash,
+	})
+	datagram.begin_mint(self.dgram)
+
+	self:rpc("asobi.datagram.open", {}, function(result, err)
+		if err or not result then
+			-- datagram_unavailable is a normal answer, not a failure: this
+			-- server has no plane today and the WebSocket carries everything.
+			self:_datagram_stop()
+			return
+		end
+		local host, port = self:_datagram_endpoint(result.endpoint)
+		if not host then
+			self:_datagram_stop()
+			return
+		end
+		udp:setpeername(host, port)
+		datagram.on_mint(self.dgram, {
+			conn_id = result.conn_id,
+			kup = self:_b64decode(result.kup),
+			epoch = result.epoch,
+			-- The manifest: field names in canonical order with their scales.
+			-- Delivered once, here, which is what makes a pose record a fixed
+			-- layout carrying no field names at all.
+			fields = result.fields or {},
+		})
+	end)
+end
+
+function M:_datagram_stop()
+	if self.dgram then datagram.stop(self.dgram) end
+	if self.dgram_socket then
+		pcall(function() self.dgram_socket:close() end)
+		self.dgram_socket = nil
+	end
+	self.dgram = nil
+	self.pose_tick = {}
+end
+
+function M:_datagram_update()
+	local dg = self.dgram
+	if not dg then return end
+	local now = os.clock()
+
+	-- Drained in a bounded pass. An uncapped loop would let a flood hold the
+	-- frame, which on a client is a visible stall rather than an abstraction.
+	for _ = 1, 64 do
+		local raw = self.dgram_socket and self.dgram_socket:receive()
+		if not raw then break end
+		local pose = datagram.on_datagram(dg, raw, now)
+		if pose then self:_apply_pose(pose) end
+	end
+	datagram.update(dg, now)
+end
+
+-- Applies one pose frame to the entity registry.
+--
+-- A pose can never create or remove an entity - it carries a slot and a bitmask
+-- and has nowhere to say otherwise - so a slot with no binding is skipped and
+-- the world.tick that introduces it is what fixes that.
+function M:_apply_pose(pose)
+	local zkey = tostring(pose.zone[1]) .. ":" .. tostring(pose.zone[2])
+	local table_for_zone = self.wire_state.slots[zkey]
+	if not table_for_zone then return end
+	local fields = self.dgram.fields
+	if #fields == 0 then return end
+
+	for _, record in ipairs(pose.records) do
+		local id = table_for_zone[record.slot]
+		if id and self.entities[id] and self.entity_zone[id] == zkey then
+			local last = self.pose_tick[id]
+			if not last or pose.tick >= last then
+				self.pose_tick[id] = pose.tick
+				local state = self.entities[id]
+				local changed = {}
+				for i, field in ipairs(fields) do
+					local v = record.values[i]
+					if v ~= nil then
+						-- The inverse of the server's quantisation. Two
+						-- multiplies in Lua, which is why the wire carries
+						-- int16 and a scale rather than float32.
+						local scaled = v / field.scale
+						local name = field.name
+						if state[name] ~= scaled then
+							state[name] = scaled
+							changed[#changed + 1] = name
+						end
+					end
+				end
+				if #changed > 0 then fire(self, "entity_updated", id, state, changed) end
+			end
+		end
+	end
+end
+
+-- "host:port" as the mint response gives it, which is what makes the plane
+-- independent of DNS and of SNI and why a non-standard port costs nothing.
+function M:_datagram_endpoint(endpoint)
+	if type(endpoint) ~= "string" then return nil end
+	local host, port = endpoint:match("^(.+):(%d+)$")
+	if not host then return nil end
+	return host, tonumber(port)
+end
+
+-- LOVE ships a SHA256; a plain-Lua host may not, and the plane is simply
+-- unavailable there rather than half-built.
+function M:_sha256()
+	if love and love.data and love.data.hash then
+		return function(bytes) return love.data.hash("sha256", bytes) end
+	end
+	return nil
+end
+
+function M:_b64decode(s)
+	if love and love.data then return love.data.decode("string", "base64", s) end
+	return s
 end
 
 function M:_send(mtype, payload)
