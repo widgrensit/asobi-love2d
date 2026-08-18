@@ -575,7 +575,7 @@ Wire-level detail is in the
 ## Binary `world.tick`
 
 Ask for the binary encoding and `world.tick` arrives as a WebSocket binary frame
-in roughly a fifth of the bytes. The decode saving is the one that matters here:
+in about a quarter of the bytes. The decode saving is the one that matters here:
 LOVE has no native JSON, so this SDK ships a **pure-Lua parser**, and a 40-entity
 delta costs it around 440 us per frame - at 20 Hz, close to 1% of a mobile CPU
 doing nothing but reading text. The binary decoder was measured **33x faster** on
